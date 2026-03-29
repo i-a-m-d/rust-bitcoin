@@ -75,7 +75,8 @@ extern crate std;
 #[cfg(feature = "serde")]
 pub extern crate serde;
 
-#[cfg(all(test, feature = "serde"))]
+#[cfg(feature = "serde")]
+#[cfg(test)]
 extern crate serde_test;
 
 pub extern crate encoding;

@@ -5,18 +5,21 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::many_single_char_names)]
 
-#[cfg(all(target_arch = "aarch64", any(feature = "std", feature = "cpufeatures")))]
+#[cfg(any(feature = "cpufeatures", feature = "std"))]
+#[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::{
     vaddq_u32, vld1q_u32, vreinterpretq_u32_u8, vreinterpretq_u8_u32, vrev32q_u8, vsha256h2q_u32,
     vsha256hq_u32, vsha256su0q_u32, vsha256su1q_u32, vst1q_u32,
 };
-#[cfg(all(target_arch = "x86", any(feature = "std", feature = "cpufeatures")))]
+#[cfg(any(feature = "cpufeatures", feature = "std"))]
+#[cfg(target_arch = "x86")]
 use core::arch::x86::{
     __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128, _mm_set_epi64x,
     _mm_sha256msg1_epu32, _mm_sha256msg2_epu32, _mm_sha256rnds2_epu32, _mm_shuffle_epi32,
     _mm_shuffle_epi8, _mm_storeu_si128,
 };
-#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "cpufeatures")))]
+#[cfg(any(feature = "cpufeatures", feature = "std"))]
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
     __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128, _mm_set_epi64x,
     _mm_sha256msg1_epu32, _mm_sha256msg2_epu32, _mm_sha256rnds2_epu32, _mm_shuffle_epi32,
@@ -28,7 +31,8 @@ use internals::slice::SliceExt;
 use super::{HashEngine, Midstate, BLOCK_SIZE};
 use crate::sha256d;
 
-#[cfg(all(feature = "cpufeatures", target_arch = "aarch64"))]
+#[cfg(feature = "cpufeatures")]
+#[cfg(target_arch = "aarch64")]
 // cpufeatures crate internally uses `u8::max_value()` which will be deprecated.
 // See: https://docs.rs/cpufeatures/0.2.17/src/cpufeatures/lib.rs.html#161
 #[allow(deprecated_in_future)]
@@ -36,7 +40,8 @@ mod cpuid_sha256_aarch64 {
     cpufeatures::new!(inner, "sha2");
     pub fn get() -> bool { inner::get() }
 }
-#[cfg(all(feature = "cpufeatures", any(target_arch = "x86", target_arch = "x86_64")))]
+#[cfg(feature = "cpufeatures")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 // cpufeatures crate internally uses `u8::max_value()` which will be deprecated.
 // See: https://docs.rs/cpufeatures/0.2.17/src/cpufeatures/lib.rs.html#161
 #[allow(deprecated_in_future)]
@@ -287,7 +292,8 @@ impl Midstate {
 
 impl HashEngine {
     pub(super) fn process_blocks(state: &mut [u32; 8], blocks: &[u8]) {
-        #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(feature = "std")]
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1")
                 && std::is_x86_feature_detected!("sha")
@@ -301,7 +307,8 @@ impl HashEngine {
             }
         }
 
-        #[cfg(all(feature = "cpufeatures", any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(feature = "cpufeatures")]
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if cpuid_sha256_x86::get() {
                 for block in blocks.chunks_exact(BLOCK_SIZE) {
@@ -311,7 +318,8 @@ impl HashEngine {
             }
         }
 
-        #[cfg(all(feature = "std", target_arch = "aarch64"))]
+        #[cfg(feature = "std")]
+        #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("sha2") {
                 for block in blocks.chunks_exact(BLOCK_SIZE) {
@@ -321,7 +329,8 @@ impl HashEngine {
             }
         }
 
-        #[cfg(all(feature = "cpufeatures", target_arch = "aarch64"))]
+        #[cfg(feature = "cpufeatures")]
+        #[cfg(target_arch = "aarch64")]
         {
             if cpuid_sha256_aarch64::get() {
                 for block in blocks.chunks_exact(BLOCK_SIZE) {
@@ -345,7 +354,8 @@ impl HashEngine {
         // TODO: 2-way x86 SHA-NI
 
         // 2-way ARM SHA2
-        #[cfg(all(feature = "std", target_arch = "aarch64"))]
+        #[cfg(feature = "std")]
+        #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("sha2") {
                 while count - i >= 2 {
@@ -357,7 +367,8 @@ impl HashEngine {
             }
         }
 
-        #[cfg(all(feature = "cpufeatures", target_arch = "aarch64"))]
+        #[cfg(feature = "cpufeatures")]
+        #[cfg(target_arch = "aarch64")]
         {
             if cpuid_sha256_aarch64::get() {
                 while count - i >= 2 {
@@ -376,10 +387,8 @@ impl HashEngine {
         }
     }
 
-    #[cfg(all(
-        any(target_arch = "x86", target_arch = "x86_64"),
-        any(feature = "std", feature = "cpufeatures")
-    ))]
+    #[cfg(any(feature = "cpufeatures", feature = "std"))]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
     unsafe fn process_block_simd_x86_intrinsics(state: &mut [u32; 8], block: &[u8]) {
         // Code translated and based on from
@@ -638,7 +647,8 @@ impl HashEngine {
         _mm_storeu_si128(state.as_mut_ptr().add(4).cast::<__m128i>(), state1);
     }
 
-    #[cfg(all(target_arch = "aarch64", any(feature = "std", feature = "cpufeatures")))]
+    #[cfg(any(feature = "cpufeatures", feature = "std"))]
+    #[cfg(target_arch = "aarch64")]
     #[target_feature(enable = "sha2")]
     unsafe fn process_block_simd_arm_intrinsics(state: &mut [u32; 8], block: &[u8]) {
         // Code translated and based on from
@@ -826,7 +836,8 @@ impl HashEngine {
         vst1q_u32(state.as_mut_ptr().add(4), state1);
     }
 
-    #[cfg(all(target_arch = "aarch64", any(feature = "std", feature = "cpufeatures")))]
+    #[cfg(any(feature = "cpufeatures", feature = "std"))]
+    #[cfg(target_arch = "aarch64")]
     #[target_feature(enable = "sha2")]
     unsafe fn sha256d_64_arm_2way(output: &mut [[u8; 32]; 2], input: &[[u8; 64]; 2]) {
         // Based on Bitcoin Core's sha256d64_arm_shani::Transform_2way
