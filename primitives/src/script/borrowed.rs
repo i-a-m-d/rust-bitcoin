@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 use alloc::string::String;
 use core::marker::PhantomData;
 use core::ops::{
@@ -125,7 +126,8 @@ impl<T> Script<T> {
     ///
     /// Consensus encoding includes a length prefix. To hex encode without the length prefix use
     /// `to_hex_string_no_length_prefix`.
-    #[cfg(all(feature = "hex", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     pub fn to_hex_string_prefixed(&self) -> String {
         use hex_unstable::{BytesToHexIter, Case};
 
@@ -137,7 +139,8 @@ impl<T> Script<T> {
     ///
     /// This is **not** consensus encoding. The returned hex string will not include the length
     /// prefix. See `to_hex_string_prefixed`.
-    #[cfg(all(feature = "hex", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     pub fn to_hex_string_no_length_prefix(&self) -> String {
         use hex_unstable::DisplayHex as _;
 

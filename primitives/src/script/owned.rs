@@ -261,7 +261,8 @@ impl fmt::Display for FromHexError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "hex"))]
+#[cfg(feature = "hex")]
+#[cfg(feature = "std")]
 impl std::error::Error for FromHexError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {

@@ -29,12 +29,14 @@ use internals::array::ArrayExt as _;
 use internals::write_err;
 #[cfg(feature = "serde")]
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 use units::parse_int;
 
 #[cfg(feature = "alloc")]
 use crate::amount::{AmountDecoder, AmountEncoder};
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 use crate::hex_codec::{HexPrimitive, ParsePrimitiveError};
 #[cfg(feature = "alloc")]
 use crate::locktime::absolute::{LockTimeDecoder, LockTimeDecoderError, LockTimeEncoder};
@@ -376,7 +378,8 @@ impl Encodable for Transaction {
     }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl core::str::FromStr for Transaction {
     type Err = ParseTransactionError;
 
@@ -385,21 +388,24 @@ impl core::str::FromStr for Transaction {
     }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl fmt::Display for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&HexPrimitive(self), f)
     }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl fmt::LowerHex for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::LowerHex::fmt(&HexPrimitive(self), f)
     }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl fmt::UpperHex for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::UpperHex::fmt(&HexPrimitive(self), f)
@@ -407,23 +413,28 @@ impl fmt::UpperHex for Transaction {
 }
 
 /// An error that occurs during parsing of a [`Transaction`] from a hex string.
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseTransactionError(ParsePrimitiveError<Transaction>);
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl From<Infallible> for ParseTransactionError {
     fn from(never: Infallible) -> Self { match never {} }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
 impl fmt::Display for ParseTransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_err!(f, "parse transaction error"; self.0)
     }
 }
 
-#[cfg(all(feature = "hex", feature = "alloc", feature = "std"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
+#[cfg(feature = "std")]
 impl std::error::Error for ParseTransactionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
 }
@@ -1650,7 +1661,8 @@ mod tests {
     use hex_unstable::hex;
 
     use super::*;
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     use crate::absolute::LockTime;
 
     #[test]
@@ -2062,7 +2074,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn encode_segwit_transaction() {
         let tx = Transaction {
             version: Version::TWO,
@@ -2306,7 +2319,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn decode_segwit_transaction() {
         let tx_bytes = hex!(
             "02000000000101595895ea20179de87052b4046dfe6fd515860505d6511a9004cf12a1f93cac7c01000000\
@@ -2355,7 +2369,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn decode_nonsegwit_transaction() {
         let tx_bytes = hex!("0100000001a15d57094aa7a21a28cb20b59aab8fc7d1149a3bdbcddba9c622e4f5f6a99ece010000006c493046022100f93bb0e7d8db7bd46e40132d1f8242026e045f03a0efe71bbb8e3f475e970d790221009337cd7f1f929f00cc6ff01f03729b069a7c21b59b1736ddfee5db5946c5da8c0121033b9b137ee87d5a812d6f506efdd37f0affa7ffc310711c06c7f3e097c9447c52ffffffff0100e1f505000000001976a9140389035a9225b3839e2bbf32d826a1e222031fd888ac00000000");
 
@@ -2389,7 +2404,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn decode_segwit_without_witnesses_errors() {
         // A SegWit-serialized transaction with 1 input but no witnesses for any input.
         let tx_bytes = hex!(
@@ -2434,7 +2450,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_null_prevout_in_non_coinbase_transaction() {
         // Test vector taken from Bitcoin Core tx_invalid.json
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L64
@@ -2453,7 +2470,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_coinbase_scriptsig_too_small() {
         // Test vector taken from Bitcoin Core tx_invalid.json
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L57
@@ -2472,7 +2490,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_coinbase_scriptsig_too_large() {
         // Test vector taken from Bitcoin Core tx_invalid.json:
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L62
@@ -2491,7 +2510,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn accept_coinbase_scriptsig_min_valid() {
         // boundary test: 2 bytes is the minimum valid length
         let tx_bytes = hex!("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff025151ffffffff010000000000000000015100000000");
@@ -2505,7 +2525,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn accept_coinbase_scriptsig_max_valid() {
         // boundary test: 100 bytes is the maximum valid length
         let tx_bytes = hex!("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff6451515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151ffffffff010000000000000000015100000000");
@@ -2519,7 +2540,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_duplicate_inputs() {
         // Test vector from Bitcoin Core tx_invalid.json:
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L50
@@ -2548,7 +2570,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_output_value_sum_too_large() {
         // Test vector taken from Bitcoin Core tx_invalid.json
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L48
@@ -2567,7 +2590,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn accept_output_value_sum_equal_to_max_money() {
         let tx_bytes = hex!("01000000010001000000000000000000000000000000000000000000000000000000000000000000006d483045022027deccc14aa6668e78a8c9da3484fbcd4f9dcc9bb7d1b85146314b21b9ae4d86022100d0b43dece8cfb07348de0ca8bc5b86276fa88f7f2138381128b7c36ab2e42264012321029bb13463ddd5d2cc05da6e84e37536cb9525703cfd8f43afdb414988987a92f6acffffffff020080c6a47e8d0300015100c040b571e80300015100000000");
 
@@ -2581,7 +2605,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_output_value_greater_than_max_money() {
         // Test vector taken from Bitcoin Core tx_invalid.json
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L44
@@ -2595,7 +2620,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "alloc", feature = "hex"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "hex")]
     fn reject_transaction_with_no_outputs() {
         // Test vector taken from Bitcoin Core tx_invalid.json
         // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L36

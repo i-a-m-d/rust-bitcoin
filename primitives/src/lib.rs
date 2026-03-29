@@ -53,7 +53,9 @@ pub mod block;
 pub mod merkle_tree;
 #[cfg(feature = "alloc")]
 pub mod script;
-#[cfg(all(feature = "serde", feature = "hex", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "hex")]
+#[cfg(feature = "serde")]
 pub mod serde_as_consensus;
 pub mod transaction;
 #[cfg(feature = "alloc")]
@@ -110,7 +112,8 @@ mod prelude {
     #[cfg(feature = "alloc")]
     pub use alloc::{string::{String, ToString}, vec::Vec, boxed::Box, borrow::{Borrow, BorrowMut, Cow, ToOwned}, slice, rc};
 
-    #[cfg(all(feature = "alloc", target_has_atomic = "ptr"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(target_has_atomic = "ptr")]
     pub use alloc::sync;
 }
 
