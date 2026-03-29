@@ -32,7 +32,8 @@ static BASE58_CHARS: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopq
 #[cfg(feature = "alloc")]
 pub mod error;
 
-#[cfg(all(feature = "alloc", not(feature = "std")))]
+#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 pub use alloc::{string::String, vec::Vec};
 #[cfg(feature = "alloc")]
 use core::fmt;
