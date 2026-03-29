@@ -38,7 +38,8 @@ mod error;
 #[cfg(feature = "hashes")]
 mod hash;
 
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 use core::cmp;
 #[cfg(feature = "std")]
@@ -650,7 +651,8 @@ impl<D> From<Error> for ReadError<D> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(all(not(feature = "std"), feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(not(feature = "std"))]
     use alloc::{string::ToString, vec};
     #[cfg(feature = "std")]
     use std::{string::ToString, vec};

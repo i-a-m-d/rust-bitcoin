@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use core::fmt;
 #[cfg(feature = "std")]
@@ -19,7 +20,8 @@ pub struct Error {
 
     #[cfg(feature = "std")]
     error: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
-    #[cfg(all(feature = "alloc", not(feature = "std")))]
+    #[cfg(feature = "alloc")]
+    #[cfg(not(feature = "std"))]
     error: Option<Box<dyn fmt::Debug + Send + Sync + 'static>>,
 }
 
@@ -34,7 +36,8 @@ impl Error {
     }
 
     /// Constructs a new I/O error.
-    #[cfg(all(feature = "alloc", not(feature = "std")))]
+    #[cfg(feature = "alloc")]
+    #[cfg(not(feature = "std"))]
     pub fn new<E: sealed::IntoBoxDynDebug>(kind: ErrorKind, error: E) -> Self {
         Self { kind, _not_unwind_safe: core::marker::PhantomData, error: Some(error.into()) }
     }
@@ -49,7 +52,8 @@ impl Error {
     }
 
     /// Returns a reference to this error.
-    #[cfg(all(feature = "alloc", not(feature = "std")))]
+    #[cfg(feature = "alloc")]
+    #[cfg(not(feature = "std"))]
     pub fn get_ref(&self) -> Option<&(dyn fmt::Debug + Send + Sync + 'static)> {
         self.error.as_deref()
     }
@@ -197,7 +201,8 @@ define_errorkind!(
     Other
 );
 
-#[cfg(all(feature = "alloc", not(feature = "std")))]
+#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 mod sealed {
     use alloc::boxed::Box;
     use alloc::string::String;
