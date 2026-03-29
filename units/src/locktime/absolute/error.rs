@@ -29,7 +29,8 @@ impl fmt::Display for LockTimeDecoderError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "encoding"))]
+#[cfg(feature = "encoding")]
+#[cfg(feature = "std")]
 impl std::error::Error for LockTimeDecoderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
 }
@@ -330,7 +331,8 @@ mod tests {
     #[cfg(feature = "std")]
     use std::error::Error;
 
-    #[cfg(all(feature = "encoding", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "encoding")]
     use encoding::{Decodable as _, Decoder as _};
 
     #[cfg(feature = "alloc")]

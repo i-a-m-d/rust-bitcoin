@@ -331,7 +331,8 @@ impl fmt::Display for SequenceDecoderError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "encoding"))]
+#[cfg(feature = "encoding")]
+#[cfg(feature = "std")]
 impl std::error::Error for SequenceDecoderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
 }
@@ -382,12 +383,15 @@ impl<'a> Arbitrary<'a> for Sequence {
 mod tests {
     #[cfg(feature = "alloc")]
     use alloc::format;
-    #[cfg(all(feature = "encoding", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "encoding")]
     use alloc::string::ToString;
-    #[cfg(all(feature = "encoding", feature = "std"))]
+    #[cfg(feature = "encoding")]
+    #[cfg(feature = "std")]
     use std::error::Error;
 
-    #[cfg(all(feature = "encoding", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "encoding")]
     use encoding::UnexpectedEofError;
     #[cfg(feature = "encoding")]
     use encoding::{Decodable as _, Decoder as _};
@@ -497,7 +501,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "encoding", feature = "alloc"))]
+    #[cfg(feature = "alloc")]
+    #[cfg(feature = "encoding")]
     fn sequence_decoding_error() {
         let bytes = [0xff, 0xff, 0xff]; // 3 bytes is an EOF error
 

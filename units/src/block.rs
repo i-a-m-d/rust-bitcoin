@@ -265,7 +265,8 @@ impl fmt::Display for BlockHeightDecoderError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "encoding"))]
+#[cfg(feature = "encoding")]
+#[cfg(feature = "std")]
 impl std::error::Error for BlockHeightDecoderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
 }
