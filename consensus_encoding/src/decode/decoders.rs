@@ -712,7 +712,8 @@ impl fmt::Display for ByteVecDecoderError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "alloc"))]
+#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 impl std::error::Error for ByteVecDecoderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         use ByteVecDecoderErrorInner as E;
