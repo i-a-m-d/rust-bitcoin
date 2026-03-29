@@ -200,7 +200,8 @@ mod prelude {
     #[cfg(not(feature = "std"))]
     pub use alloc::{string::{String, ToString}, vec::Vec, boxed::Box, borrow::{Borrow, BorrowMut, Cow, ToOwned}, slice, rc};
 
-    #[cfg(all(not(feature = "std"), target_has_atomic = "ptr"))]
+    #[cfg(target_has_atomic = "ptr")]
+    #[cfg(not(feature = "std"))]
     pub use alloc::sync;
 
     #[cfg(feature = "std")]

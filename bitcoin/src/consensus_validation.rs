@@ -223,7 +223,8 @@ impl fmt::Display for BitcoinconsensusError {
     }
 }
 
-#[cfg(all(feature = "std", feature = "bitcoinconsensus"))]
+#[cfg(feature = "bitcoinconsensus")]
+#[cfg(feature = "std")]
 impl std::error::Error for BitcoinconsensusError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
 }

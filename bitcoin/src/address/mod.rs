@@ -9,7 +9,9 @@
 //! ### Creating a new address from a randomly-generated key pair.
 //!
 //! ```rust
-//! #[cfg(all(feature = "rand", feature = "std"))] {
+//! #[cfg(feature = "rand")]
+//! #[cfg(feature = "std")]
+//! {
 //! use bitcoin::secp256k1::rand;
 //! use bitcoin::{Address, Network, PublicKey};
 //!

@@ -1301,7 +1301,8 @@ mod tests {
 
     use hashes::{hash160, ripemd160, sha256};
     use hex_unstable::hex;
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     use {
         crate::bip32::Fingerprint, crate::locktime, crate::script::ScriptPubKeyBufExt as _,
         crate::witness_version::WitnessVersion, crate::WitnessProgram, secp256k1::SecretKey,
@@ -1312,7 +1313,8 @@ mod tests {
     use crate::locktime::absolute;
     use crate::network::NetworkKind;
     use crate::psbt::serialize::{Deserialize, Serialize};
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     use crate::script::ScriptBufExt as _;
     use crate::script::{RedeemScriptBuf, ScriptPubKeyBuf, ScriptSigBuf, WitnessScriptBuf};
     use crate::transaction::{self, OutPoint, TxIn};
@@ -2353,7 +2355,8 @@ mod tests {
         ));
     }
 
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn gen_keys() -> (PrivateKey, PublicKey) {
         use secp256k1::rand;
 
@@ -2365,7 +2368,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn get_key_btree_map() {
         let (priv_key, pk) = gen_keys();
 
@@ -2377,7 +2381,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn pubkey_map_get_key_negates_odd_parity_keys() {
         use crate::psbt::{GetKey, KeyRequest};
 
@@ -2623,7 +2628,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn hashmap_can_sign_taproot() {
         let (priv_key, pk) = gen_keys();
         let internal_key: XOnlyPublicKey = pk.into();
@@ -2656,7 +2662,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn xonly_hashmap_can_sign_taproot() {
         let (priv_key, pk) = gen_keys();
         let internal_key: XOnlyPublicKey = pk.into();
@@ -2689,7 +2696,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(feature = "rand")]
+    #[cfg(feature = "std")]
     fn sign_psbt() {
         let unsigned_tx = Transaction {
             version: transaction::Version::TWO,
