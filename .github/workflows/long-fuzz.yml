@@ -220,7 +220,7 @@ jobs:
 
           root = pathlib.Path('long-fuzz-download')
           rows = []
-          for meta_path in sorted(root.glob('*/meta.json')):
+          for meta_path in sorted(root.rglob('meta.json')):
               data = json.loads(meta_path.read_text())
               rows.append(data)
 
