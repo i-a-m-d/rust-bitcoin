@@ -152,6 +152,17 @@ jobs:
 
           end_ts="$(date +%s)"
           duration_s="$((end_ts - start_ts))"
+          completed_runs="$(python3 - "$result_root/run.log" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          log_path = pathlib.Path(sys.argv[1])
+          text = log_path.read_text(errors='replace')
+          matches = re.findall(r"Done\s+([0-9]+)\s+runs\s+in\s+([0-9]+)\s+second\(s\)", text)
+          print(matches[-1][0] if matches else "")
+          PY
+          )"
 
           artifact_count=0
           if [[ -d "fuzz/artifacts/$target" ]]; then
@@ -164,6 +175,7 @@ jobs:
           export RESULT_ROOT="$result_root"
           export FUZZ_STATUS="$status"
           export DURATION_S="$duration_s"
+          export COMPLETED_RUNS="$completed_runs"
           export RUSTFLAGS_USED="$rustflags"
           export ARTIFACT_COUNT="$artifact_count"
           export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -180,6 +192,7 @@ jobs:
               'target': target,
               'status': os.environ['FUZZ_STATUS'],
               'duration_s': int(os.environ['DURATION_S']),
+              'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
               'seconds_per_target': int(os.environ['LONG_FUZZ_SECONDS']),
               'crypto_mode': os.environ['CRYPTO_MODE'],
               'rustflags': os.environ['RUSTFLAGS_USED'],
@@ -211,7 +224,6 @@ jobs:
         with:
           path: long-fuzz-download
           pattern: long-fuzz-*
-          merge-multiple: true
       - name: Build summary reports
         run: |
           python3 - <<'PY'
@@ -228,10 +240,10 @@ jobs:
 
           summary_tsv = root / 'summary.tsv'
           with summary_tsv.open('w') as f:
-              f.write('target\tstatus\tduration_s\tseconds_per_target\tcrypto_mode\trustflags\tartifact_count\trun_url\tjob_url\n')
+              f.write('target\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tcrypto_mode\trustflags\tartifact_count\trun_url\tjob_url\n')
               for row in rows:
                   f.write(
-                      f"{row.get('target','')}\t{row.get('status','')}\t{row.get('duration_s','')}\t"
+                      f"{row.get('target','')}\t{row.get('status','')}\t{row.get('completed_runs','')}\t{row.get('duration_s','')}\t"
                       f"{row.get('seconds_per_target','')}\t{row.get('crypto_mode','')}\t"
                       f"{row.get('rustflags','')}\t{row.get('artifact_count','')}\t"
                       f"{row.get('run_url','')}\t{row.get('job_url','')}\n"
@@ -246,13 +258,14 @@ jobs:
               f.write(f"- successful targets: `{ok}`\n")
               f.write(f"- failed targets: `{failed}`\n")
               f.write(f"- crypto mode: `{rows[0].get('crypto_mode') if rows else ''}`\n\n")
-              f.write('| target | status | duration (s) | crash files | rustflags |\n')
+              f.write('| target | status | runs | duration (s) | rustflags |\n')
               f.write('| --- | --- | ---: | ---: | --- |\n')
               for row in rows:
+                  rustflags = row.get('rustflags') or 'none'
                   f.write(
                       f"| `{row.get('target','')}` | `{row.get('status','')}` | "
-                      f"{row.get('duration_s','')} | {row.get('artifact_count','')} | "
-                      f"`{row.get('rustflags','')}` |\n"
+                      f"{row.get('completed_runs','') or ''} | {row.get('duration_s','')} | "
+                      f"`{rustflags}` |\n"
                   )
 
           print(summary_md.read_text())
