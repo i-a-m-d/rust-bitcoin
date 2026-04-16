@@ -1,6 +1,6 @@
 # Fork-local workflow for longer-running fuzzing.
 # Intentionally separate from the generated daily fuzz workflow.
-name: Fork Long Fuzz
+name: Long Fuzz rust-bitcoin
 
 on:
   schedule:
@@ -43,6 +43,8 @@ jobs:
       target_count: ${{ steps.targets.outputs.target_count }}
       seconds_per_target: ${{ steps.config.outputs.seconds_per_target }}
       crypto_mode: ${{ steps.config.outputs.crypto_mode }}
+      tested_commit: ${{ steps.commit.outputs.tested_commit }}
+      tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -58,6 +60,11 @@ jobs:
         run: |
           echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '14400' }}" >> "$GITHUB_OUTPUT"
           echo "crypto_mode=${{ github.event.inputs.crypto_mode || 'real' }}" >> "$GITHUB_OUTPUT"
+      - id: commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "tested_commit=$sha" >> "$GITHUB_OUTPUT"
+          echo "tested_commit_url=https://github.com/rust-bitcoin/rust-bitcoin/commit/$sha" >> "$GITHUB_OUTPUT"
       - id: targets
         env:
           TARGET_FILTER: ${{ github.event.inputs.targets || '' }}
@@ -100,6 +107,8 @@ jobs:
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
       LONG_FUZZ_SECONDS: ${{ needs.discover.outputs.seconds_per_target }}
       CRYPTO_MODE: ${{ needs.discover.outputs.crypto_mode }}
+      TESTED_COMMIT: ${{ needs.discover.outputs.tested_commit }}
+      TESTED_COMMIT_URL: ${{ needs.discover.outputs.tested_commit_url }}
     steps:
       - name: Install test dependencies
         run: sudo apt-get update -y && sudo apt-get install -y binutils-dev libunwind8-dev libcurl4-openssl-dev libelf-dev libdw-dev cmake gcc libiberty-dev
@@ -195,6 +204,8 @@ jobs:
               'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
               'seconds_per_target': int(os.environ['LONG_FUZZ_SECONDS']),
               'crypto_mode': os.environ['CRYPTO_MODE'],
+              'tested_commit': os.environ['TESTED_COMMIT'],
+              'tested_commit_url': os.environ['TESTED_COMMIT_URL'],
               'rustflags': os.environ['RUSTFLAGS_USED'],
               'artifact_count': int(os.environ['ARTIFACT_COUNT']),
               'run_url': os.environ['RUN_URL'],
@@ -240,11 +251,11 @@ jobs:
 
           summary_tsv = root / 'summary.tsv'
           with summary_tsv.open('w') as f:
-              f.write('target\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tcrypto_mode\trustflags\tartifact_count\trun_url\tjob_url\n')
+              f.write('target\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tcrypto_mode\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
               for row in rows:
                   f.write(
                       f"{row.get('target','')}\t{row.get('status','')}\t{row.get('completed_runs','')}\t{row.get('duration_s','')}\t"
-                      f"{row.get('seconds_per_target','')}\t{row.get('crypto_mode','')}\t"
+                      f"{row.get('seconds_per_target','')}\t{row.get('crypto_mode','')}\t{row.get('tested_commit','')}\t{row.get('tested_commit_url','')}\t"
                       f"{row.get('rustflags','')}\t{row.get('artifact_count','')}\t"
                       f"{row.get('run_url','')}\t{row.get('job_url','')}\n"
                   )
@@ -258,6 +269,8 @@ jobs:
               f.write(f"- successful targets: `{ok}`\n")
               f.write(f"- failed targets: `{failed}`\n")
               f.write(f"- crypto mode: `{rows[0].get('crypto_mode') if rows else ''}`\n\n")
+              if rows:
+                  f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n\n")
               f.write('| target | status | runs | duration (s) | rustflags |\n')
               f.write('| --- | --- | ---: | ---: | --- |\n')
               for row in rows:
