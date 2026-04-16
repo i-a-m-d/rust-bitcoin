@@ -264,7 +264,7 @@ jobs:
           ok = sum(1 for row in rows if row.get('status') == 'success')
           failed = len(rows) - ok
           with summary_md.open('w') as f:
-              f.write('# Fork Long Fuzz Summary\n\n')
+              f.write('# Long Fuzz rust-bitcoin Summary\n\n')
               f.write(f"- target count: `{len(rows)}`\n")
               f.write(f"- successful targets: `{ok}`\n")
               f.write(f"- failed targets: `{failed}`\n")
