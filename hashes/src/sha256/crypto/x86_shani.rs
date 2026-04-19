@@ -275,4 +275,3 @@ pub(super) unsafe fn process_block(state: &mut [u32; 8], block: &[u8]) {
     _mm_storeu_si128(state.as_mut_ptr().add(0).cast::<__m128i>(), state0);
     _mm_storeu_si128(state.as_mut_ptr().add(4).cast::<__m128i>(), state1);
 }
-

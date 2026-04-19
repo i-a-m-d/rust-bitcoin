@@ -944,4 +944,3 @@ pub(super) unsafe fn sha256d_64_2way(output: &mut [[u8; 32]; 2], input: &[[u8; 6
     vst1q_u8(output[1].as_mut_ptr().add(0), vrev32q_u8(vreinterpretq_u8_u32(state0_b)));
     vst1q_u8(output[1].as_mut_ptr().add(16), vrev32q_u8(vreinterpretq_u8_u32(state1_b)));
 }
-

@@ -31,8 +31,7 @@ use bitcoin::taproot::{self, ControlBlock, LeafVersion, TapTree, TaprootBuilder}
 use bitcoin::witness::Witness;
 use bitcoin::{
     ecdsa, hex, transaction, Address, Amount, LegacyPublicKey, NetworkKind, OutPoint,
-    ScriptPubKeyBuf, ScriptSigBuf, Sequence, TapScriptBuf, Transaction, TxIn, TxOut, Txid,
-    WifKey,
+    ScriptPubKeyBuf, ScriptSigBuf, Sequence, TapScriptBuf, Transaction, TxIn, TxOut, Txid, WifKey,
 };
 
 #[test]

@@ -5,7 +5,6 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::many_single_char_names)]
 
-
 #[cfg(target_arch = "aarch64")]
 #[cfg(any(feature = "cpufeatures", feature = "std"))]
 mod arm_sha2;
