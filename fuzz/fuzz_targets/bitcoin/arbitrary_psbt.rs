@@ -1,10 +1,10 @@
 #![cfg_attr(fuzzing, no_main)]
 #![cfg_attr(not(fuzzing), allow(unused))]
 
-use libfuzzer_sys::fuzz_target;
 use arbitrary::{Arbitrary, Unstructured};
-
-use bitcoin::{FeeRate, Psbt, Transaction, bip32::Xpriv};
+use bitcoin::bip32::Xpriv;
+use bitcoin::{FeeRate, Psbt, Transaction};
+use libfuzzer_sys::fuzz_target;
 
 #[cfg(not(fuzzing))]
 fn main() {}
@@ -14,7 +14,6 @@ fn do_test(data: &[u8]) {
     let p = Psbt::arbitrary(&mut u);
 
     if let Ok(mut psbt) = p {
-
         if let Ok(tx) = Transaction::arbitrary(&mut u) {
             let _ = Psbt::from_unsigned_tx(tx);
         }
