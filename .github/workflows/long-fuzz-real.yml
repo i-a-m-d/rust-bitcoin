@@ -1,10 +1,10 @@
 # Fork-local workflow for longer-running fuzzing.
 # Intentionally separate from the generated daily fuzz workflow.
-name: Long Fuzz rust-bitcoin
+name: Long Fuzz rust-bitcoin (real crypto)
 
 on:
   schedule:
-    - cron: '00 02 * * 0'
+    - cron: '00 02 * * *'
   workflow_dispatch:
     inputs:
       seconds_per_target:
@@ -12,14 +12,6 @@ on:
         required: false
         default: '19200'
         type: string
-      crypto_mode:
-        description: 'real = no weak crypto flags; fake = apply hashes_fuzz+secp256k1_fuzz to all targets'
-        required: false
-        default: real
-        type: choice
-        options:
-          - real
-          - fake
       targets:
         description: 'Optional comma-separated target list. Leave empty to run all targets.'
         required: false
@@ -29,7 +21,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: fork-long-fuzz
+  group: fork-long-fuzz-real
   cancel-in-progress: false
 
 jobs:
@@ -42,7 +34,6 @@ jobs:
       fuzz_targets: ${{ steps.targets.outputs.fuzz_targets }}
       target_count: ${{ steps.targets.outputs.target_count }}
       seconds_per_target: ${{ steps.config.outputs.seconds_per_target }}
-      crypto_mode: ${{ steps.config.outputs.crypto_mode }}
       tested_commit: ${{ steps.commit.outputs.tested_commit }}
       tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
     steps:
@@ -59,7 +50,6 @@ jobs:
       - id: config
         run: |
           echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '19200' }}" >> "$GITHUB_OUTPUT"
-          echo "crypto_mode=${{ github.event.inputs.crypto_mode || 'real' }}" >> "$GITHUB_OUTPUT"
       - id: commit
         run: |
           sha="$(git rev-parse HEAD)"
@@ -107,7 +97,7 @@ jobs:
       RUST_BACKTRACE: '1'
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
       LONG_FUZZ_SECONDS: ${{ needs.discover.outputs.seconds_per_target }}
-      CRYPTO_MODE: ${{ needs.discover.outputs.crypto_mode }}
+      CRYPTO_MODE: 'real'
       TESTED_COMMIT: ${{ needs.discover.outputs.tested_commit }}
       TESTED_COMMIT_URL: ${{ needs.discover.outputs.tested_commit_url }}
     steps:
@@ -221,7 +211,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: long-fuzz-${{ matrix.fuzz_target }}
+          name: long-fuzz-real-${{ matrix.fuzz_target }}
           path: long-fuzz-result/${{ matrix.fuzz_target }}
           if-no-files-found: warn
 
@@ -235,7 +225,7 @@ jobs:
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           path: long-fuzz-download
-          pattern: long-fuzz-*
+          pattern: long-fuzz-real-*
       - name: Build summary reports
         run: |
           python3 - <<'PY'
@@ -265,7 +255,7 @@ jobs:
           ok = sum(1 for row in rows if row.get('status') == 'success')
           failed = len(rows) - ok
           with summary_md.open('w') as f:
-              f.write('# Long Fuzz rust-bitcoin Summary\n\n')
+              f.write('# Long Fuzz rust-bitcoin Summary (real crypto)\n\n')
               f.write(f"- target count: `{len(rows)}`\n")
               f.write(f"- successful targets: `{ok}`\n")
               f.write(f"- failed targets: `{failed}`\n")
@@ -289,7 +279,7 @@ jobs:
       - name: Upload consolidated summary
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: long-fuzz-summary
+          name: long-fuzz-real-summary
           path: |
             long-fuzz-download/summary.md
             long-fuzz-download/summary.tsv

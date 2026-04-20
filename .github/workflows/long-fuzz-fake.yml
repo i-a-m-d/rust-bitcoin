@@ -1,0 +1,285 @@
+# Fork-local workflow for longer-running fuzzing.
+# Intentionally separate from the generated daily fuzz workflow.
+name: Long Fuzz rust-bitcoin (fake crypto)
+
+on:
+  schedule:
+    - cron: '00 14 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: 'Seconds to fuzz each target'
+        required: false
+        default: '19200'
+        type: string
+      targets:
+        description: 'Optional comma-separated target list. Leave empty to run all targets.'
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fork-long-fuzz-fake
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      fuzz_targets: ${{ steps.targets.outputs.fuzz_targets }}
+      target_count: ${{ steps.targets.outputs.target_count }}
+      seconds_per_target: ${{ steps.config.outputs.seconds_per_target }}
+      tested_commit: ${{ steps.commit.outputs.tested_commit }}
+      tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: master
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: '1.74.0'
+      - name: Install cargo-fuzz
+        run: cargo install --force --locked --version 0.12.0 cargo-fuzz
+      - id: config
+        run: |
+          echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '19200' }}" >> "$GITHUB_OUTPUT"
+      - id: commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "tested_commit=$sha" >> "$GITHUB_OUTPUT"
+          echo "tested_commit_url=https://github.com/rust-bitcoin/rust-bitcoin/commit/$sha" >> "$GITHUB_OUTPUT"
+      - id: targets
+        env:
+          TARGET_FILTER: ${{ github.event.inputs.targets || '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          repo = pathlib.Path('.').resolve()
+          output = subprocess.check_output(['cargo', 'fuzz', 'list'], cwd=repo / 'fuzz', text=True)
+          targets = [line.strip() for line in output.splitlines() if line.strip()]
+
+          raw_filter = os.environ.get('TARGET_FILTER', '').strip()
+          if raw_filter:
+              wanted = [item.strip() for item in raw_filter.split(',') if item.strip()]
+              missing = [item for item in wanted if item not in targets]
+              if missing:
+                  raise SystemExit(f'Unknown fuzz targets requested: {missing}')
+              targets = wanted
+
+          print(f"fuzz_targets={json.dumps(targets)}")
+          print(f"target_count={len(targets)}")
+          PY
+
+  fuzz:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 18
+      matrix:
+        fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
+    env:
+      RUST_BACKTRACE: '1'
+      FUZZ_NIGHTLY: 'nightly-2026-03-27'
+      LONG_FUZZ_SECONDS: ${{ needs.discover.outputs.seconds_per_target }}
+      CRYPTO_MODE: 'fake'
+      TESTED_COMMIT: ${{ needs.discover.outputs.tested_commit }}
+      TESTED_COMMIT_URL: ${{ needs.discover.outputs.tested_commit_url }}
+    steps:
+      - name: Install test dependencies
+        run: sudo apt-get update -y && sudo apt-get install -y binutils-dev libunwind8-dev libcurl4-openssl-dev libelf-dev libdw-dev cmake gcc libiberty-dev
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: master
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/bin
+            fuzz/target
+            target
+          key: fork-long-fuzz-build-${{ runner.os }}-${{ env.FUZZ_NIGHTLY }}-${{ hashFiles('**/Cargo.toml','**/Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: fuzz/corpus/${{ matrix.fuzz_target }}
+          key: fork-long-fuzz-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-${{ github.run_id }}
+          restore-keys: |
+            fork-long-fuzz-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: nightly-2026-03-27
+      - name: Run long fuzz target
+        run: |
+          set -euo pipefail
+          cargo install --force --locked --version 0.12.0 cargo-fuzz
+
+          target="${{ matrix.fuzz_target }}"
+          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target"
+          mkdir -p "$result_root"
+          mkdir -p "fuzz/corpus/$target"
+
+          rustflags=""
+          if [[ "$CRYPTO_MODE" == "fake" ]]; then
+            rustflags="--cfg=hashes_fuzz --cfg=secp256k1_fuzz"
+          fi
+
+          start_ts="$(date +%s)"
+          status="success"
+
+          pushd fuzz >/dev/null
+          if [[ -n "$rustflags" ]]; then
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz run "$target" "corpus/$target" -- -max_total_time=${LONG_FUZZ_SECONDS} > "$result_root/run.log" 2>&1 || status="failure"
+          else
+            cargo +${FUZZ_NIGHTLY} fuzz run "$target" "corpus/$target" -- -max_total_time=${LONG_FUZZ_SECONDS} > "$result_root/run.log" 2>&1 || status="failure"
+          fi
+          popd >/dev/null
+
+          end_ts="$(date +%s)"
+          duration_s="$((end_ts - start_ts))"
+          completed_runs="$(python3 - "$result_root/run.log" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          log_path = pathlib.Path(sys.argv[1])
+          text = log_path.read_text(errors='replace')
+          matches = re.findall(r"Done\s+([0-9]+)\s+runs\s+in\s+([0-9]+)\s+second\(s\)", text)
+          print(matches[-1][0] if matches else "")
+          PY
+          )"
+
+          artifact_count=0
+          if [[ -d "fuzz/artifacts/$target" ]]; then
+            mkdir -p "$result_root/artifacts"
+            cp -R "fuzz/artifacts/$target" "$result_root/artifacts/"
+            artifact_count="$(find "fuzz/artifacts/$target" -type f | wc -l | tr -d ' ')"
+          fi
+
+          export TARGET_NAME="$target"
+          export RESULT_ROOT="$result_root"
+          export FUZZ_STATUS="$status"
+          export DURATION_S="$duration_s"
+          export COMPLETED_RUNS="$completed_runs"
+          export RUSTFLAGS_USED="$rustflags"
+          export ARTIFACT_COUNT="$artifact_count"
+          export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          target = os.environ['TARGET_NAME']
+          result_root = pathlib.Path(os.environ['RESULT_ROOT'])
+          payload = {
+              'target': target,
+              'status': os.environ['FUZZ_STATUS'],
+              'duration_s': int(os.environ['DURATION_S']),
+              'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
+              'seconds_per_target': int(os.environ['LONG_FUZZ_SECONDS']),
+              'crypto_mode': os.environ['CRYPTO_MODE'],
+              'tested_commit': os.environ['TESTED_COMMIT'],
+              'tested_commit_url': os.environ['TESTED_COMMIT_URL'],
+              'rustflags': os.environ['RUSTFLAGS_USED'],
+              'artifact_count': int(os.environ['ARTIFACT_COUNT']),
+              'run_url': os.environ['RUN_URL'],
+              'job_url': os.environ['JOB_URL'],
+          }
+          (result_root / 'meta.json').write_text(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+          if [[ "$status" != "success" ]]; then
+            exit 1
+          fi
+      - name: Upload per-target results
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: long-fuzz-fake-${{ matrix.fuzz_target }}
+          path: long-fuzz-result/${{ matrix.fuzz_target }}
+          if-no-files-found: warn
+
+  summarize:
+    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' }}
+    needs: [discover, fuzz]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          path: long-fuzz-download
+          pattern: long-fuzz-fake-*
+      - name: Build summary reports
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          root = pathlib.Path('long-fuzz-download')
+          rows = []
+          for meta_path in sorted(root.rglob('meta.json')):
+              data = json.loads(meta_path.read_text())
+              rows.append(data)
+
+          rows.sort(key=lambda row: (row.get('status') != 'success', row.get('target', '')))
+
+          summary_tsv = root / 'summary.tsv'
+          with summary_tsv.open('w') as f:
+              f.write('target\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tcrypto_mode\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
+              for row in rows:
+                  f.write(
+                      f"{row.get('target','')}\t{row.get('status','')}\t{row.get('completed_runs','')}\t{row.get('duration_s','')}\t"
+                      f"{row.get('seconds_per_target','')}\t{row.get('crypto_mode','')}\t{row.get('tested_commit','')}\t{row.get('tested_commit_url','')}\t"
+                      f"{row.get('rustflags','')}\t{row.get('artifact_count','')}\t"
+                      f"{row.get('run_url','')}\t{row.get('job_url','')}\n"
+                  )
+
+          summary_md = root / 'summary.md'
+          ok = sum(1 for row in rows if row.get('status') == 'success')
+          failed = len(rows) - ok
+          with summary_md.open('w') as f:
+              f.write('# Long Fuzz rust-bitcoin Summary (fake crypto)\n\n')
+              f.write(f"- target count: `{len(rows)}`\n")
+              f.write(f"- successful targets: `{ok}`\n")
+              f.write(f"- failed targets: `{failed}`\n")
+              f.write(f"- crypto mode: `{rows[0].get('crypto_mode') if rows else ''}`\n\n")
+              if rows:
+                  f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n\n")
+              f.write('| target | status | runs | duration (s) | rustflags |\n')
+              f.write('| --- | --- | ---: | ---: | --- |\n')
+              for row in rows:
+                  rustflags = row.get('rustflags') or 'none'
+                  f.write(
+                      f"| `{row.get('target','')}` | `{row.get('status','')}` | "
+                      f"{row.get('completed_runs','') or ''} | {row.get('duration_s','')} | "
+                      f"`{rustflags}` |\n"
+                  )
+
+          print(summary_md.read_text())
+          PY
+      - name: Publish job summary
+        run: cat long-fuzz-download/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload consolidated summary
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: long-fuzz-fake-summary
+          path: |
+            long-fuzz-download/summary.md
+            long-fuzz-download/summary.tsv
