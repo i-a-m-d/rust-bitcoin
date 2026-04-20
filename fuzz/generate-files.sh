@@ -89,7 +89,7 @@ $(for name in $(cargo fuzz list); do echo "          $name,"; done)
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         id: cache-fuzz
         with:
           path: |
@@ -108,7 +108,7 @@ $(for name in $(cargo fuzz list); do echo "          $name,"; done)
           echo "Using RUSTFLAGS \$RUSTFLAGS"
           cd fuzz && ./fuzz.sh "\${{ matrix.fuzz_target }}"
       - run: echo "\${{ matrix.fuzz_target }}" >executed_\${{ matrix.fuzz_target }}
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: executed_\${{ matrix.fuzz_target }}
           path: executed_\${{ matrix.fuzz_target }}
@@ -123,11 +123,10 @@ $(for name in $(cargo fuzz list); do echo "          $name,"; done)
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+      - uses: actions/download-artifact@37930b11763d9f0f4b1540e4fbc17d95832f0d32 # v7.0.0
       - run: cargo install --locked --version 0.12.0 cargo-fuzz
       - name: Display structure of downloaded files
         run: ls -R
       - run: find executed_* -type f -exec cat {} + | sort > executed
       - run: cargo fuzz list | sort | diff - executed
 EOF
-
