@@ -1,4 +1,5 @@
 on:   # yamllint disable-line rule:truthy
+  workflow_dispatch:
   pull_request:
 
 name: Check semver breaks
@@ -72,4 +73,3 @@ jobs:
         run: cargo binstall cargo-semver-checks@$(cat ./.github/workflows/cargo-semver-checks-version) --no-confirm
       - name: "Run semver checker script"
         run: ./contrib/check-semver-feature.sh
-
