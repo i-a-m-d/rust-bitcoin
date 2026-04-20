@@ -10,7 +10,7 @@ on:
       seconds_per_target:
         description: 'Seconds to fuzz each target'
         required: false
-        default: '14400'
+        default: '19200'
         type: string
       crypto_mode:
         description: 'real = no weak crypto flags; fake = apply hashes_fuzz+secp256k1_fuzz to all targets'
@@ -58,7 +58,7 @@ jobs:
         run: cargo install --force --locked --version 0.12.0 cargo-fuzz
       - id: config
         run: |
-          echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '14400' }}" >> "$GITHUB_OUTPUT"
+          echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '19200' }}" >> "$GITHUB_OUTPUT"
           echo "crypto_mode=${{ github.event.inputs.crypto_mode || 'real' }}" >> "$GITHUB_OUTPUT"
       - id: commit
         run: |
@@ -95,11 +95,12 @@ jobs:
     if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
     needs: discover
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 345
     permissions:
       contents: read
     strategy:
       fail-fast: false
+      max-parallel: 18
       matrix:
         fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
     env:
