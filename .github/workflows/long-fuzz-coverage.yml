@@ -36,7 +36,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.event.inputs.compare_run_id }}
           path: compare-artifacts
-          pattern: long-fuzz-compare-*
+          pattern: long-fuzz-compare-data-*
       - id: plan
         env:
           TARGET_FILTER: ${{ github.event.inputs.targets || '' }}

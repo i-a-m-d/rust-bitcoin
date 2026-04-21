@@ -204,8 +204,10 @@ jobs:
           batch_index="${{ matrix.batch_index }}"
           run_indexes_json='${{ toJson(matrix.run_indexes) }}'
           upload_root="$GITHUB_WORKSPACE/long-fuzz-upload/$target/mode-$mode_id/batch-$batch_index"
+          meta_upload_root="$GITHUB_WORKSPACE/long-fuzz-meta/$target/mode-$mode_id/batch-$batch_index"
           mkdir -p "$upload_root/long-fuzz-result/$target/mode-$mode_id"
           mkdir -p "$upload_root/long-fuzz-corpus/$target/mode-$mode_id"
+          mkdir -p "$meta_upload_root/long-fuzz-meta/$target/mode-$mode_id"
 
           case "$mode_id" in
             1)
@@ -372,6 +374,8 @@ jobs:
 
             cp -R "$result_root" "$upload_root/long-fuzz-result/$target/mode-$mode_id/"
             cp -R "$corpus_dir" "$upload_root/long-fuzz-corpus/$target/mode-$mode_id/"
+            mkdir -p "$meta_upload_root/long-fuzz-meta/$target/mode-$mode_id/run-$run_index"
+            cp "$result_root/meta.json" "$meta_upload_root/long-fuzz-meta/$target/mode-$mode_id/run-$run_index/meta.json"
 
             if [[ "$status" != "success" ]]; then
               overall_status="failure"
@@ -392,10 +396,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-batch-${{ matrix.batch_index }}
+          name: long-fuzz-compare-data-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-batch-${{ matrix.batch_index }}
           path: |
             long-fuzz-upload/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/batch-${{ matrix.batch_index }}/long-fuzz-result
             long-fuzz-upload/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/batch-${{ matrix.batch_index }}/long-fuzz-corpus
+          if-no-files-found: warn
+      - name: Upload per-target metadata
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-compare-meta-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-batch-${{ matrix.batch_index }}
+          path: |
+            long-fuzz-meta/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/batch-${{ matrix.batch_index }}/long-fuzz-meta
           if-no-files-found: warn
 
   summarize:
@@ -408,7 +420,7 @@ jobs:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: long-fuzz-download
-          pattern: long-fuzz-compare-*
+          pattern: long-fuzz-compare-meta-*
       - name: Build comparison summary reports
         run: |
           python3 - <<'PY'
