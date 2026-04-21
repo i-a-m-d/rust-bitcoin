@@ -282,7 +282,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}
-          path: long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
+          path: |
+            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
+            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
           if-no-files-found: warn
 
   summarize:

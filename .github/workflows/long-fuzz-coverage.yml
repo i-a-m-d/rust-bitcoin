@@ -1,0 +1,235 @@
+name: Analyze Long Fuzz Coverage rust-bitcoin
+
+on:
+  workflow_dispatch:
+    inputs:
+      compare_run_id:
+        description: 'Run ID of a completed Compare Long Fuzz Modes rust-bitcoin workflow'
+        required: true
+        type: string
+      targets:
+        description: 'Optional comma-separated target list. Leave empty to analyze all targets from the compare run.'
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fork-long-fuzz-coverage
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      entry_count: ${{ steps.plan.outputs.entry_count }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.inputs.compare_run_id }}
+          path: compare-artifacts
+          pattern: long-fuzz-compare-*
+      - id: plan
+        env:
+          TARGET_FILTER: ${{ github.event.inputs.targets || '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path('compare-artifacts')
+          entries = []
+          for meta_path in sorted(root.rglob('meta.json')):
+              data = json.loads(meta_path.read_text())
+              entries.append({
+                  'artifact_name': meta_path.parent.name,
+                  'target': data['target'],
+                  'mode_id': data['mode_id'],
+                  'mode_name': data['mode_name'],
+                  'rustflags': data.get('rustflags', ''),
+                  'tested_commit': data['tested_commit'],
+                  'tested_commit_url': data['tested_commit_url'],
+              })
+
+          raw_filter = os.environ.get('TARGET_FILTER', '').strip()
+          if raw_filter:
+              wanted = {item.strip() for item in raw_filter.split(',') if item.strip()}
+              entries = [entry for entry in entries if entry['target'] in wanted]
+
+          print(f"matrix={json.dumps(entries)}")
+          print(f"entry_count={len(entries)}")
+          PY
+
+  coverage:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' && needs.prepare.outputs.entry_count != '0' }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      FUZZ_NIGHTLY: 'nightly-2026-03-27'
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: ${{ matrix.tested_commit }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: nightly-2026-03-27
+          components: llvm-tools-preview
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.inputs.compare_run_id }}
+          name: ${{ matrix.artifact_name }}
+          path: compare-input
+      - name: Build coverage reports
+        run: |
+          set -euo pipefail
+
+          cargo install --force --locked --version 0.12.0 cargo-fuzz
+
+          target="${{ matrix.target }}"
+          mode_id="${{ matrix.mode_id }}"
+          mode_name="${{ matrix.mode_name }}"
+          rustflags="${{ matrix.rustflags }}"
+          corpus_dir="$GITHUB_WORKSPACE/compare-input/long-fuzz-corpus/$target/mode-$mode_id"
+          report_root="$GITHUB_WORKSPACE/coverage-report/$target/mode-$mode_id"
+          mkdir -p "$report_root"
+
+          if [[ ! -d "$corpus_dir" ]]; then
+            echo "missing corpus dir: $corpus_dir" >&2
+            find "$GITHUB_WORKSPACE/compare-input" -maxdepth 5 -type d | sort >&2
+            exit 1
+          fi
+
+          if [[ -n "$rustflags" ]]; then
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          else
+            cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          fi
+
+          host_triple="$(rustc +${FUZZ_NIGHTLY} -vV | awk '/^host: / {print $2}')"
+          sysroot="$(rustc +${FUZZ_NIGHTLY} --print sysroot)"
+          llvm_cov="$sysroot/lib/rustlib/$host_triple/bin/llvm-cov"
+          binary="$GITHUB_WORKSPACE/fuzz/target/$host_triple/release/$target"
+          profdata="$GITHUB_WORKSPACE/fuzz/coverage/$target/coverage.profdata"
+
+          "$llvm_cov" export --summary-only -instr-profile="$profdata" "$binary" > "$report_root/coverage-summary.json"
+          "$llvm_cov" report -instr-profile="$profdata" "$binary" > "$report_root/coverage-report.txt"
+          "$llvm_cov" show -format=html -output-dir="$report_root/html" -instr-profile="$profdata" "$binary" > /dev/null
+
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          report_root = pathlib.Path('coverage-report') / '${{ matrix.target }}' / 'mode-${{ matrix.mode_id }}'
+          meta = {
+              'target': '${{ matrix.target }}',
+              'mode_id': int('${{ matrix.mode_id }}'),
+              'mode_name': '${{ matrix.mode_name }}',
+              'rustflags': '${{ matrix.rustflags }}',
+              'tested_commit': '${{ matrix.tested_commit }}',
+              'tested_commit_url': '${{ matrix.tested_commit_url }}',
+              'compare_run_id': '${{ github.event.inputs.compare_run_id }}',
+          }
+          (report_root / 'meta.json').write_text(json.dumps(meta, indent=2, sort_keys=True))
+          PY
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-coverage-${{ matrix.target }}-mode-${{ matrix.mode_id }}
+          path: coverage-report/${{ matrix.target }}/mode-${{ matrix.mode_id }}
+
+  summarize:
+    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && needs.prepare.outputs.entry_count != '0' }}
+    needs: [prepare, coverage]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: coverage-download
+          pattern: long-fuzz-coverage-*
+      - name: Build coverage summary
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          root = pathlib.Path('coverage-download')
+          rows = []
+          for meta_path in sorted(root.rglob('meta.json')):
+              report_root = meta_path.parent
+              meta = json.loads(meta_path.read_text())
+              summary = json.loads((report_root / 'coverage-summary.json').read_text())
+              total = summary['data'][0]['totals']
+              rows.append({
+                  **meta,
+                  'line_percent': total['lines']['percent'],
+                  'function_percent': total['functions']['percent'],
+                  'region_percent': total['regions']['percent'],
+                  'branch_percent': total.get('branches', {}).get('percent'),
+              })
+
+          rows.sort(key=lambda row: (row['target'], row['mode_id']))
+
+          summary_tsv = root / 'summary.tsv'
+          with summary_tsv.open('w') as f:
+              f.write('target\tmode_id\tmode_name\tline_percent\tfunction_percent\tregion_percent\tbranch_percent\ttested_commit\ttested_commit_url\tcompare_run_id\trustflags\n')
+              for row in rows:
+                  f.write(
+                      f"{row['target']}\t{row['mode_id']}\t{row['mode_name']}\t{row['line_percent']}\t{row['function_percent']}\t{row['region_percent']}\t{row.get('branch_percent','')}\t"
+                      f"{row['tested_commit']}\t{row['tested_commit_url']}\t{row['compare_run_id']}\t{row['rustflags']}\n"
+                  )
+
+          summary_md = root / 'summary.md'
+          with summary_md.open('w') as f:
+              f.write('# Long Fuzz Coverage Summary\n\n')
+              if rows:
+                  f.write(f"- compare run id: `{rows[0]['compare_run_id']}`\n")
+                  f.write(f"- tested commit: [`{rows[0]['tested_commit']}`]({rows[0]['tested_commit_url']})\n\n")
+              current_target = None
+              for row in rows:
+                  if row['target'] != current_target:
+                      if current_target is not None:
+                          f.write('\n')
+                      current_target = row['target']
+                      f.write(f"## `{current_target}`\n\n")
+                      f.write('| mode | lines % | functions % | regions % | branches % | rustflags |\n')
+                      f.write('| --- | ---: | ---: | ---: | ---: | --- |\n')
+                  f.write(
+                      f"| `{row['mode_id']}: {row['mode_name']}` | {row['line_percent']} | {row['function_percent']} | "
+                      f"{row['region_percent']} | {row.get('branch_percent','')} | `{row['rustflags'] or 'none'}` |\n"
+                  )
+
+          print(summary_md.read_text())
+          PY
+      - name: Publish job summary
+        run: cat coverage-download/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload consolidated coverage summary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-coverage-summary
+          path: |
+            coverage-download/summary.md
+            coverage-download/summary.tsv
