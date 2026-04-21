@@ -46,14 +46,15 @@ jobs:
     permissions:
       contents: read
     outputs:
-      fuzz_targets: ${{ steps.targets.outputs.fuzz_targets }}
       target_count: ${{ steps.targets.outputs.target_count }}
       stop_mode: ${{ steps.config.outputs.stop_mode }}
       stop_value: ${{ steps.config.outputs.stop_value }}
       base_seed: ${{ steps.config.outputs.base_seed }}
-      run_indexes: ${{ steps.config.outputs.run_indexes }}
+      run_count: ${{ steps.config.outputs.run_count }}
       tested_commit: ${{ steps.commit.outputs.tested_commit }}
       tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
+      matrix_entries: ${{ steps.plan.outputs.matrix_entries }}
+      matrix_size: ${{ steps.plan.outputs.matrix_size }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -71,11 +72,10 @@ jobs:
           echo "stop_value=${{ github.event.inputs.stop_value || '19200' }}" >> "$GITHUB_OUTPUT"
           echo "base_seed=${{ github.event.inputs.base_seed || '1' }}" >> "$GITHUB_OUTPUT"
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
           count = int("${{ github.event.inputs.run_count || '1' }}")
           if count < 1:
               raise SystemExit("run_count must be >= 1")
-          print(f"run_indexes={json.dumps(list(range(1, count + 1)))}")
+          print(f"run_count={count}")
           PY
       - id: commit
         run: |
@@ -107,6 +107,48 @@ jobs:
           print(f"fuzz_targets={json.dumps(targets)}")
           print(f"target_count={len(targets)}")
           PY
+      - id: plan
+        env:
+          FUZZ_TARGETS_JSON: ${{ steps.targets.outputs.fuzz_targets }}
+          RUN_COUNT: ${{ steps.config.outputs.run_count }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import math
+          import os
+
+          mode_ids = [1, 2, 3, 4]
+          max_matrix_entries = 256
+
+          targets = json.loads(os.environ['FUZZ_TARGETS_JSON'])
+          run_count = int(os.environ['RUN_COUNT'])
+
+          target_mode_count = len(targets) * len(mode_ids)
+          if target_mode_count < 1:
+              raise SystemExit('no targets to schedule')
+
+          max_batches = max_matrix_entries // target_mode_count
+          if max_batches < 1:
+              raise SystemExit(
+                  f'too many target/mode combinations: {target_mode_count} exceeds max matrix capacity {max_matrix_entries}'
+              )
+
+          batch_count = min(run_count, max_batches)
+          entries = []
+          for target in targets:
+              for mode_id in mode_ids:
+                  for batch_index in range(1, batch_count + 1):
+                      run_indexes = list(range(batch_index, run_count + 1, batch_count))
+                      entries.append({
+                          'fuzz_target': target,
+                          'mode_id': mode_id,
+                          'batch_index': batch_index,
+                          'run_indexes': run_indexes,
+                      })
+
+          print(f"matrix_entries={json.dumps(entries)}")
+          print(f"matrix_size={len(entries)}")
+          PY
 
   fuzz:
     if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
@@ -119,9 +161,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
-        mode_id: [1, 2, 3, 4]
-        run_index: ${{ fromJson(needs.discover.outputs.run_indexes) }}
+        include: ${{ fromJson(needs.discover.outputs.matrix_entries) }}
     env:
       RUST_BACKTRACE: '1'
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
@@ -161,12 +201,11 @@ jobs:
 
           target="${{ matrix.fuzz_target }}"
           mode_id="${{ matrix.mode_id }}"
-          run_index="${{ matrix.run_index }}"
-          effective_seed="$((BASE_SEED + run_index - 1))"
-          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id/run-$run_index"
-          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/run-$run_index"
-          mkdir -p "$result_root"
-          mkdir -p "$corpus_dir"
+          batch_index="${{ matrix.batch_index }}"
+          run_indexes_json='${{ toJson(matrix.run_indexes) }}'
+          upload_root="$GITHUB_WORKSPACE/long-fuzz-upload/$target/mode-$mode_id/batch-$batch_index"
+          mkdir -p "$upload_root/long-fuzz-result/$target/mode-$mode_id"
+          mkdir -p "$upload_root/long-fuzz-corpus/$target/mode-$mode_id"
 
           case "$mode_id" in
             1)
@@ -191,34 +230,45 @@ jobs:
               ;;
           esac
 
-          fuzz_args=("-print_final_stats=1" "-seed=${effective_seed}")
-          case "$STOP_MODE" in
-            seconds)
-              fuzz_args+=("-max_total_time=${STOP_VALUE}")
-              ;;
-            runs)
-              fuzz_args+=("-runs=${STOP_VALUE}")
-              ;;
-            *)
-              echo "unknown STOP_MODE=$STOP_MODE" >&2
-              exit 1
-              ;;
-          esac
+          overall_status="success"
 
-          start_ts="$(date +%s)"
-          status="success"
+          while IFS= read -r run_index; do
+            effective_seed="$((BASE_SEED + run_index - 1))"
+            result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id/run-$run_index"
+            corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/run-$run_index"
+            mkdir -p "$result_root"
+            mkdir -p "$corpus_dir"
 
-          pushd fuzz >/dev/null
-          if [[ -n "$rustflags" ]]; then
-            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
-          else
-            cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
-          fi
-          popd >/dev/null
+            fuzz_args=("-print_final_stats=1" "-seed=${effective_seed}")
+            case "$STOP_MODE" in
+              seconds)
+                fuzz_args+=("-max_total_time=${STOP_VALUE}")
+                ;;
+              runs)
+                fuzz_args+=("-runs=${STOP_VALUE}")
+                ;;
+              *)
+                echo "unknown STOP_MODE=$STOP_MODE" >&2
+                exit 1
+                ;;
+            esac
 
-          end_ts="$(date +%s)"
-          duration_s="$((end_ts - start_ts))"
-          metrics_json="$(python3 - "$result_root/run.log" <<'PY'
+            start_ts="$(date +%s)"
+            status="success"
+
+            rm -rf "fuzz/artifacts/$target"
+
+            pushd fuzz >/dev/null
+            if [[ -n "$rustflags" ]]; then
+              env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
+            else
+              cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
+            fi
+            popd >/dev/null
+
+            end_ts="$(date +%s)"
+            duration_s="$((end_ts - start_ts))"
+            metrics_json="$(python3 - "$result_root/run.log" <<'PY'
           import json
           import pathlib
           import re
@@ -249,44 +299,44 @@ jobs:
           }
           print(json.dumps(payload))
           PY
-          )"
-          completed_runs="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("completed_runs") or ""))' "$metrics_json")"
-          final_cov="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_cov") or ""))' "$metrics_json")"
-          final_ft="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_ft") or ""))' "$metrics_json")"
-          final_exec_per_sec="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_exec_per_sec") or ""))' "$metrics_json")"
-          final_rss_mb="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_rss_mb") or ""))' "$metrics_json")"
-          final_corpus_count="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_count") or ""))' "$metrics_json")"
-          final_corpus_size="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_size") or ""))' "$metrics_json")"
+            )"
+            completed_runs="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("completed_runs") or ""))' "$metrics_json")"
+            final_cov="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_cov") or ""))' "$metrics_json")"
+            final_ft="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_ft") or ""))' "$metrics_json")"
+            final_exec_per_sec="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_exec_per_sec") or ""))' "$metrics_json")"
+            final_rss_mb="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_rss_mb") or ""))' "$metrics_json")"
+            final_corpus_count="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_count") or ""))' "$metrics_json")"
+            final_corpus_size="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_size") or ""))' "$metrics_json")"
 
-          artifact_count=0
-          if [[ -d "fuzz/artifacts/$target" ]]; then
-            mkdir -p "$result_root/artifacts"
-            cp -R "fuzz/artifacts/$target" "$result_root/artifacts/"
-            artifact_count="$(find "fuzz/artifacts/$target" -type f | wc -l | tr -d ' ')"
-          fi
+            artifact_count=0
+            if [[ -d "fuzz/artifacts/$target" ]]; then
+              mkdir -p "$result_root/artifacts"
+              cp -R "fuzz/artifacts/$target" "$result_root/artifacts/"
+              artifact_count="$(find "fuzz/artifacts/$target" -type f | wc -l | tr -d ' ')"
+            fi
 
-          export TARGET_NAME="$target"
-          export MODE_ID="$mode_id"
-          export MODE_NAME="$mode_name"
-          export RUN_INDEX="$run_index"
-          export RESULT_ROOT="$result_root"
-          export FUZZ_STATUS="$status"
-          export DURATION_S="$duration_s"
-          export FUZZ_DURATION_S="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get(\"fuzz_duration_s\") or \"\"))' "$metrics_json")"
-          export COMPLETED_RUNS="$completed_runs"
-          export FINAL_COV="$final_cov"
-          export FINAL_FT="$final_ft"
-          export FINAL_EXEC_PER_SEC="$final_exec_per_sec"
-          export FINAL_RSS_MB="$final_rss_mb"
-          export FINAL_CORPUS_COUNT="$final_corpus_count"
-          export FINAL_CORPUS_SIZE="$final_corpus_size"
-          export RUSTFLAGS_USED="$rustflags"
-          export ARTIFACT_COUNT="$artifact_count"
-          export FUZZ_SEED_USED="$effective_seed"
-          export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            export TARGET_NAME="$target"
+            export MODE_ID="$mode_id"
+            export MODE_NAME="$mode_name"
+            export RUN_INDEX="$run_index"
+            export RESULT_ROOT="$result_root"
+            export FUZZ_STATUS="$status"
+            export DURATION_S="$duration_s"
+            export FUZZ_DURATION_S="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get(\"fuzz_duration_s\") or \"\"))' "$metrics_json")"
+            export COMPLETED_RUNS="$completed_runs"
+            export FINAL_COV="$final_cov"
+            export FINAL_FT="$final_ft"
+            export FINAL_EXEC_PER_SEC="$final_exec_per_sec"
+            export FINAL_RSS_MB="$final_rss_mb"
+            export FINAL_CORPUS_COUNT="$final_corpus_count"
+            export FINAL_CORPUS_SIZE="$final_corpus_size"
+            export RUSTFLAGS_USED="$rustflags"
+            export ARTIFACT_COUNT="$artifact_count"
+            export FUZZ_SEED_USED="$effective_seed"
+            export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          python3 - <<'PY'
+            python3 - <<'PY'
           import json
           import os
           import pathlib
@@ -319,17 +369,33 @@ jobs:
           }
           (result_root / 'meta.json').write_text(json.dumps(payload, indent=2, sort_keys=True))
           PY
-          if [[ "$status" != "success" ]]; then
+
+            cp -R "$result_root" "$upload_root/long-fuzz-result/$target/mode-$mode_id/"
+            cp -R "$corpus_dir" "$upload_root/long-fuzz-corpus/$target/mode-$mode_id/"
+
+            if [[ "$status" != "success" ]]; then
+              overall_status="failure"
+            fi
+          done < <(python3 - <<'PY' "$run_indexes_json"
+          import json
+          import sys
+
+          for value in json.loads(sys.argv[1]):
+              print(value)
+          PY
+          )
+
+          if [[ "$overall_status" != "success" ]]; then
             exit 1
           fi
       - name: Upload per-target results
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-run-${{ matrix.run_index }}
+          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-batch-${{ matrix.batch_index }}
           path: |
-            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/run-${{ matrix.run_index }}
-            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/run-${{ matrix.run_index }}
+            long-fuzz-upload/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/batch-${{ matrix.batch_index }}/long-fuzz-result
+            long-fuzz-upload/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/batch-${{ matrix.batch_index }}/long-fuzz-corpus
           if-no-files-found: warn
 
   summarize:
