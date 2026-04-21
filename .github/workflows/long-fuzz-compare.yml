@@ -1,0 +1,370 @@
+# Fork-local workflow for comparing long-running fuzz modes side by side.
+name: Compare Long Fuzz Modes rust-bitcoin
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: 'Seconds to fuzz each target'
+        required: false
+        default: '19200'
+        type: string
+      seed:
+        description: 'libFuzzer seed. Use the same seed to compare mode 1/2/3 fairly.'
+        required: false
+        default: '1'
+        type: string
+      targets:
+        description: 'Comma-separated target list. Defaults to bitcoin_arbitrary_psbt.'
+        required: false
+        default: 'bitcoin_arbitrary_psbt'
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fork-long-fuzz-compare
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      fuzz_targets: ${{ steps.targets.outputs.fuzz_targets }}
+      target_count: ${{ steps.targets.outputs.target_count }}
+      seconds_per_target: ${{ steps.config.outputs.seconds_per_target }}
+      seed: ${{ steps.config.outputs.seed }}
+      tested_commit: ${{ steps.commit.outputs.tested_commit }}
+      tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: master
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: '1.74.0'
+      - name: Install cargo-fuzz
+        run: cargo install --force --locked --version 0.12.0 cargo-fuzz
+      - id: config
+        run: |
+          echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '19200' }}" >> "$GITHUB_OUTPUT"
+          echo "seed=${{ github.event.inputs.seed || '1' }}" >> "$GITHUB_OUTPUT"
+      - id: commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "tested_commit=$sha" >> "$GITHUB_OUTPUT"
+          echo "tested_commit_url=https://github.com/rust-bitcoin/rust-bitcoin/commit/$sha" >> "$GITHUB_OUTPUT"
+      - id: targets
+        env:
+          TARGET_FILTER: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          repo = pathlib.Path('.').resolve()
+          output = subprocess.check_output(['cargo', 'fuzz', 'list'], cwd=repo / 'fuzz', text=True)
+          targets = [line.strip() for line in output.splitlines() if line.strip()]
+
+          raw_filter = os.environ.get('TARGET_FILTER', '').strip()
+          if raw_filter:
+              wanted = [item.strip() for item in raw_filter.split(',') if item.strip()]
+              missing = [item for item in wanted if item not in targets]
+              if missing:
+                  raise SystemExit(f'Unknown fuzz targets requested: {missing}')
+              targets = wanted
+
+          print(f"fuzz_targets={json.dumps(targets)}")
+          print(f"target_count={len(targets)}")
+          PY
+
+  fuzz:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' }}
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 9
+      matrix:
+        fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
+        mode_id: [1, 2, 3]
+    env:
+      RUST_BACKTRACE: '1'
+      FUZZ_NIGHTLY: 'nightly-2026-03-27'
+      LONG_FUZZ_SECONDS: ${{ needs.discover.outputs.seconds_per_target }}
+      FUZZ_SEED: ${{ needs.discover.outputs.seed }}
+      TESTED_COMMIT: ${{ needs.discover.outputs.tested_commit }}
+      TESTED_COMMIT_URL: ${{ needs.discover.outputs.tested_commit_url }}
+    steps:
+      - name: Install test dependencies
+        run: sudo apt-get update -y && sudo apt-get install -y binutils-dev libunwind8-dev libcurl4-openssl-dev libelf-dev libdw-dev cmake gcc libiberty-dev
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: master
+          persist-credentials: false
+      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
+        with:
+          path: |
+            ~/.cargo/bin
+            fuzz/target
+            target
+          key: fork-long-fuzz-compare-build-${{ runner.os }}-${{ env.FUZZ_NIGHTLY }}-${{ hashFiles('**/Cargo.toml','**/Cargo.lock') }}
+      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
+        with:
+          path: long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
+          key: fork-long-fuzz-compare-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-${{ github.run_id }}
+          restore-keys: |
+            fork-long-fuzz-compare-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: nightly-2026-03-27
+      - name: Run long fuzz target comparison mode
+        run: |
+          set -euo pipefail
+          cargo install --force --locked --version 0.12.0 cargo-fuzz
+
+          target="${{ matrix.fuzz_target }}"
+          mode_id="${{ matrix.mode_id }}"
+          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id"
+          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id"
+          mkdir -p "$result_root"
+          mkdir -p "$corpus_dir"
+
+          case "$mode_id" in
+            1)
+              mode_name="real"
+              rustflags=""
+              ;;
+            2)
+              mode_name="secp256k1_fuzz"
+              rustflags="--cfg=secp256k1_fuzz"
+              ;;
+            3)
+              mode_name="hashes_fuzz+secp256k1_fuzz"
+              rustflags="--cfg=hashes_fuzz --cfg=secp256k1_fuzz"
+              ;;
+            *)
+              echo "unknown mode_id=$mode_id" >&2
+              exit 1
+              ;;
+          esac
+
+          fuzz_args=("-max_total_time=${LONG_FUZZ_SECONDS}" "-print_final_stats=1")
+          if [[ -n "$FUZZ_SEED" ]]; then
+            fuzz_args+=("-seed=${FUZZ_SEED}")
+          fi
+
+          start_ts="$(date +%s)"
+          status="success"
+
+          pushd fuzz >/dev/null
+          if [[ -n "$rustflags" ]]; then
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
+          else
+            cargo +${FUZZ_NIGHTLY} fuzz run "$target" "$corpus_dir" -- "${fuzz_args[@]}" > "$result_root/run.log" 2>&1 || status="failure"
+          fi
+          popd >/dev/null
+
+          end_ts="$(date +%s)"
+          duration_s="$((end_ts - start_ts))"
+          metrics_json="$(python3 - "$result_root/run.log" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          log_path = pathlib.Path(sys.argv[1])
+          text = log_path.read_text(errors='replace')
+
+          def last_int(pattern):
+              matches = re.findall(pattern, text)
+              return int(matches[-1]) if matches else None
+
+          def last_text(pattern):
+              matches = re.findall(pattern, text)
+              return matches[-1] if matches else None
+
+          done = re.findall(r"Done\s+([0-9]+)\s+runs\s+in\s+([0-9]+)\s+second\(s\)", text)
+
+          payload = {
+              "completed_runs": int(done[-1][0]) if done else None,
+              "done_seconds": int(done[-1][1]) if done else None,
+              "final_cov": last_int(r"\bcov:\s*([0-9]+)"),
+              "final_ft": last_int(r"\bft:\s*([0-9]+)"),
+              "final_exec_per_sec": last_int(r"\bexec/s:\s*([0-9]+)"),
+              "final_rss_mb": last_int(r"\brss:\s*([0-9]+)Mb"),
+              "final_corpus_count": last_int(r"\bcorp:\s*([0-9]+)"),
+              "final_corpus_size": last_text(r"\bcorp:\s*[0-9]+/([^\s]+)"),
+          }
+          print(json.dumps(payload))
+          PY
+          )"
+          completed_runs="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("completed_runs") or ""))' "$metrics_json")"
+          final_cov="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_cov") or ""))' "$metrics_json")"
+          final_ft="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_ft") or ""))' "$metrics_json")"
+          final_exec_per_sec="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_exec_per_sec") or ""))' "$metrics_json")"
+          final_rss_mb="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_rss_mb") or ""))' "$metrics_json")"
+          final_corpus_count="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_count") or ""))' "$metrics_json")"
+          final_corpus_size="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("final_corpus_size") or ""))' "$metrics_json")"
+
+          artifact_count=0
+          if [[ -d "fuzz/artifacts/$target" ]]; then
+            mkdir -p "$result_root/artifacts"
+            cp -R "fuzz/artifacts/$target" "$result_root/artifacts/"
+            artifact_count="$(find "fuzz/artifacts/$target" -type f | wc -l | tr -d ' ')"
+          fi
+
+          export TARGET_NAME="$target"
+          export MODE_ID="$mode_id"
+          export MODE_NAME="$mode_name"
+          export RESULT_ROOT="$result_root"
+          export FUZZ_STATUS="$status"
+          export DURATION_S="$duration_s"
+          export COMPLETED_RUNS="$completed_runs"
+          export FINAL_COV="$final_cov"
+          export FINAL_FT="$final_ft"
+          export FINAL_EXEC_PER_SEC="$final_exec_per_sec"
+          export FINAL_RSS_MB="$final_rss_mb"
+          export FINAL_CORPUS_COUNT="$final_corpus_count"
+          export FINAL_CORPUS_SIZE="$final_corpus_size"
+          export RUSTFLAGS_USED="$rustflags"
+          export ARTIFACT_COUNT="$artifact_count"
+          export FUZZ_SEED_USED="$FUZZ_SEED"
+          export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          result_root = pathlib.Path(os.environ['RESULT_ROOT'])
+          payload = {
+              'target': os.environ['TARGET_NAME'],
+              'mode_id': int(os.environ['MODE_ID']),
+              'mode_name': os.environ['MODE_NAME'],
+              'status': os.environ['FUZZ_STATUS'],
+              'duration_s': int(os.environ['DURATION_S']),
+              'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
+              'seconds_per_target': int(os.environ['LONG_FUZZ_SECONDS']),
+              'seed': int(os.environ['FUZZ_SEED_USED']) if os.environ['FUZZ_SEED_USED'] else None,
+              'tested_commit': os.environ['TESTED_COMMIT'],
+              'tested_commit_url': os.environ['TESTED_COMMIT_URL'],
+              'final_cov': int(os.environ['FINAL_COV']) if os.environ['FINAL_COV'] else None,
+              'final_ft': int(os.environ['FINAL_FT']) if os.environ['FINAL_FT'] else None,
+              'final_exec_per_sec': int(os.environ['FINAL_EXEC_PER_SEC']) if os.environ['FINAL_EXEC_PER_SEC'] else None,
+              'final_rss_mb': int(os.environ['FINAL_RSS_MB']) if os.environ['FINAL_RSS_MB'] else None,
+              'final_corpus_count': int(os.environ['FINAL_CORPUS_COUNT']) if os.environ['FINAL_CORPUS_COUNT'] else None,
+              'final_corpus_size': os.environ['FINAL_CORPUS_SIZE'] or None,
+              'rustflags': os.environ['RUSTFLAGS_USED'],
+              'artifact_count': int(os.environ['ARTIFACT_COUNT']),
+              'run_url': os.environ['RUN_URL'],
+              'job_url': os.environ['JOB_URL'],
+          }
+          (result_root / 'meta.json').write_text(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+          if [[ "$status" != "success" ]]; then
+            exit 1
+          fi
+      - name: Upload per-target results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}
+          path: long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
+          if-no-files-found: warn
+
+  summarize:
+    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' }}
+    needs: [discover, fuzz]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: long-fuzz-download
+          pattern: long-fuzz-compare-*
+      - name: Build comparison summary reports
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          root = pathlib.Path('long-fuzz-download')
+          rows = []
+          for meta_path in sorted(root.rglob('meta.json')):
+              data = json.loads(meta_path.read_text())
+              rows.append(data)
+
+          rows.sort(key=lambda row: (row.get('target', ''), row.get('mode_id', 0)))
+
+          summary_tsv = root / 'summary.tsv'
+          with summary_tsv.open('w') as f:
+              f.write('target\tmode_id\tmode_name\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tseed\tfinal_cov\tfinal_ft\tfinal_corpus_count\tfinal_corpus_size\tfinal_exec_per_sec\tfinal_rss_mb\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
+              for row in rows:
+                  f.write(
+                      f"{row.get('target','')}\t{row.get('mode_id','')}\t{row.get('mode_name','')}\t{row.get('status','')}\t"
+                      f"{row.get('completed_runs','')}\t{row.get('duration_s','')}\t{row.get('seconds_per_target','')}\t{row.get('seed','')}\t"
+                      f"{row.get('final_cov','')}\t{row.get('final_ft','')}\t{row.get('final_corpus_count','')}\t{row.get('final_corpus_size','')}\t"
+                      f"{row.get('final_exec_per_sec','')}\t{row.get('final_rss_mb','')}\t{row.get('tested_commit','')}\t{row.get('tested_commit_url','')}\t"
+                      f"{row.get('rustflags','')}\t{row.get('artifact_count','')}\t{row.get('run_url','')}\t{row.get('job_url','')}\n"
+                  )
+
+          summary_md = root / 'summary.md'
+          ok = sum(1 for row in rows if row.get('status') == 'success')
+          failed = len(rows) - ok
+          with summary_md.open('w') as f:
+              f.write('# Compare Long Fuzz Modes rust-bitcoin\n\n')
+              f.write(f"- target count: `{len({row.get('target') for row in rows}) if rows else 0}`\n")
+              f.write(f"- mode count: `3`\n")
+              f.write(f"- successful jobs: `{ok}`\n")
+              f.write(f"- failed jobs: `{failed}`\n\n")
+              if rows:
+                  f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n")
+                  seed = rows[0].get('seed')
+                  f.write(f"- seed: `{seed}`\n\n" if seed is not None else "- seed: random\n\n")
+              current_target = None
+              for row in rows:
+                  target = row.get('target', '')
+                  if target != current_target:
+                      if current_target is not None:
+                          f.write('\n')
+                      current_target = target
+                      f.write(f"## `{target}`\n\n")
+                      f.write('| mode | status | runs | cov | ft | corpus | exec/s | rss (MB) | duration (s) | rustflags |\n')
+                      f.write('| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |\n')
+                  corpus = row.get('final_corpus_count')
+                  corpus_size = row.get('final_corpus_size')
+                  if corpus is not None and corpus_size:
+                      corpus = f"{corpus}/{corpus_size}"
+                  f.write(
+                      f"| `{row.get('mode_id','')}: {row.get('mode_name','')}` | `{row.get('status','')}` | "
+                      f"{row.get('completed_runs','') or ''} | {row.get('final_cov','') or ''} | "
+                      f"{row.get('final_ft','') or ''} | {corpus or ''} | "
+                      f"{row.get('final_exec_per_sec','') or ''} | {row.get('final_rss_mb','') or ''} | {row.get('duration_s','')} | "
+                      f"`{row.get('rustflags') or 'none'}` |\n"
+                  )
+
+          print(summary_md.read_text())
+          PY
+      - name: Publish job summary
+        run: cat long-fuzz-download/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload consolidated summary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-compare-summary
+          path: |
+            long-fuzz-download/summary.md
+            long-fuzz-download/summary.tsv
