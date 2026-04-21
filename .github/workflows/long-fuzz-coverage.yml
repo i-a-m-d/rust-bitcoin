@@ -1,4 +1,7 @@
 name: Analyze Long Fuzz Coverage rust-bitcoin
+run-name: >-
+  Analyze Long Fuzz Coverage: compare run ${{ github.event.inputs.compare_run_id }}
+  ${{ github.event.inputs.targets && format('/ {0}', github.event.inputs.targets) || '' }}
 
 on:
   workflow_dispatch:

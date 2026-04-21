@@ -1,5 +1,9 @@
 # Fork-local workflow for comparing long-running fuzz modes side by side.
 name: Compare Long Fuzz Modes rust-bitcoin
+run-name: >-
+  Compare Long Fuzz Modes: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
+  / ${{ github.event.inputs.stop_mode || 'seconds' }}=${{ github.event.inputs.stop_value || '19200' }}
+  / runs=${{ github.event.inputs.run_count || '1' }}
 
 on:
   workflow_dispatch:
