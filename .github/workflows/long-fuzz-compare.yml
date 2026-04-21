@@ -552,17 +552,17 @@ jobs:
                       f.write("- seed range: random\n\n")
               if overview:
                   f.write('## Mode overview\n\n')
-        f.write('| target | mode | successful jobs | failed jobs | Avg job duration (s) | Avg fuzzing duration (s) | Avg `ft` | `ft` rank | Avg `cov` | `cov` rank | Avg corpus count | corpus rank | Avg `exec/s` | `exec/s` rank | Overall |\n')
-        f.write('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
-        for item in sorted(overview, key=lambda entry: (entry['target'], entry['overall_rank'], entry['mode_id'])):
-            f.write(
-                f"| `{item['target']}` | `{item['mode_id']}: {item['mode_name']}` | {item['successful_jobs']} | {item['failed_jobs']} | "
-                f"{fmt_float(item['avg_job_duration_s'])} | {fmt_float(item['avg_fuzz_duration_s'])} | "
-                f"{fmt_float(item['avg_final_ft'])} | {item['ft_rank']} | "
-                f"{fmt_float(item['avg_final_cov'])} | {item['cov_rank']} | "
-                f"{fmt_float(item['avg_final_corpus_count'])} | {item['corpus_rank']} | "
-                f"{fmt_float(item['avg_final_exec_per_sec'])} | {item['exec_rank']} | {item['overall_rank']} |\n"
-            )
+                  f.write('| target | mode | successful jobs | failed jobs | Avg job duration (s) | Avg fuzzing duration (s) | Avg `ft` | `ft` rank | Avg `cov` | `cov` rank | Avg corpus count | corpus rank | Avg `exec/s` | `exec/s` rank | Overall |\n')
+                  f.write('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
+                  for item in sorted(overview, key=lambda entry: (entry['target'], entry['overall_rank'], entry['mode_id'])):
+                      f.write(
+                          f"| `{item['target']}` | `{item['mode_id']}: {item['mode_name']}` | {item['successful_jobs']} | {item['failed_jobs']} | "
+                          f"{fmt_float(item['avg_job_duration_s'])} | {fmt_float(item['avg_fuzz_duration_s'])} | "
+                          f"{fmt_float(item['avg_final_ft'])} | {item['ft_rank']} | "
+                          f"{fmt_float(item['avg_final_cov'])} | {item['cov_rank']} | "
+                          f"{fmt_float(item['avg_final_corpus_count'])} | {item['corpus_rank']} | "
+                          f"{fmt_float(item['avg_final_exec_per_sec'])} | {item['exec_rank']} | {item['overall_rank']} |\n"
+                      )
                   f.write('\n')
               current_target = None
               current_run = None
