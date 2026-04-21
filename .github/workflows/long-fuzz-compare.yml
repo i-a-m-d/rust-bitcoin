@@ -4,13 +4,26 @@ name: Compare Long Fuzz Modes rust-bitcoin
 on:
   workflow_dispatch:
     inputs:
-      seconds_per_target:
-        description: 'Seconds to fuzz each target'
+      stop_mode:
+        description: 'Stop condition for each fuzz job'
+        required: false
+        default: 'seconds'
+        type: choice
+        options:
+          - seconds
+          - runs
+      stop_value:
+        description: 'Stop value per fuzz job. For example 100 seconds or 100 runs.'
         required: false
         default: '19200'
         type: string
-      seed:
-        description: 'libFuzzer seed. Use the same seed to compare mode 1/2/3 fairly.'
+      repeat_count:
+        description: 'How many repetitions to queue. New jobs start as slots clear.'
+        required: false
+        default: '1'
+        type: string
+      base_seed:
+        description: 'Base libFuzzer seed. Repetition N uses base_seed + N - 1.'
         required: false
         default: '1'
         type: string
@@ -35,8 +48,10 @@ jobs:
     outputs:
       fuzz_targets: ${{ steps.targets.outputs.fuzz_targets }}
       target_count: ${{ steps.targets.outputs.target_count }}
-      seconds_per_target: ${{ steps.config.outputs.seconds_per_target }}
-      seed: ${{ steps.config.outputs.seed }}
+      stop_mode: ${{ steps.config.outputs.stop_mode }}
+      stop_value: ${{ steps.config.outputs.stop_value }}
+      base_seed: ${{ steps.config.outputs.base_seed }}
+      repeat_indexes: ${{ steps.config.outputs.repeat_indexes }}
       tested_commit: ${{ steps.commit.outputs.tested_commit }}
       tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
     steps:
@@ -52,8 +67,16 @@ jobs:
         run: cargo install --force --locked --version 0.12.0 cargo-fuzz
       - id: config
         run: |
-          echo "seconds_per_target=${{ github.event.inputs.seconds_per_target || '19200' }}" >> "$GITHUB_OUTPUT"
-          echo "seed=${{ github.event.inputs.seed || '1' }}" >> "$GITHUB_OUTPUT"
+          echo "stop_mode=${{ github.event.inputs.stop_mode || 'seconds' }}" >> "$GITHUB_OUTPUT"
+          echo "stop_value=${{ github.event.inputs.stop_value || '19200' }}" >> "$GITHUB_OUTPUT"
+          echo "base_seed=${{ github.event.inputs.base_seed || '1' }}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          count = int("${{ github.event.inputs.repeat_count || '1' }}")
+          if count < 1:
+              raise SystemExit("repeat_count must be >= 1")
+          print(f"repeat_indexes={json.dumps(list(range(1, count + 1)))}")
+          PY
       - id: commit
         run: |
           sha="$(git rev-parse HEAD)"
@@ -94,15 +117,17 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 9
+      max-parallel: 20
       matrix:
         fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
         mode_id: [1, 2, 3]
+        repeat_index: ${{ fromJson(needs.discover.outputs.repeat_indexes) }}
     env:
       RUST_BACKTRACE: '1'
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
-      LONG_FUZZ_SECONDS: ${{ needs.discover.outputs.seconds_per_target }}
-      FUZZ_SEED: ${{ needs.discover.outputs.seed }}
+      STOP_MODE: ${{ needs.discover.outputs.stop_mode }}
+      STOP_VALUE: ${{ needs.discover.outputs.stop_value }}
+      BASE_SEED: ${{ needs.discover.outputs.base_seed }}
       TESTED_COMMIT: ${{ needs.discover.outputs.tested_commit }}
       TESTED_COMMIT_URL: ${{ needs.discover.outputs.tested_commit_url }}
     steps:
@@ -136,8 +161,10 @@ jobs:
 
           target="${{ matrix.fuzz_target }}"
           mode_id="${{ matrix.mode_id }}"
-          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id"
-          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id"
+          repeat_index="${{ matrix.repeat_index }}"
+          effective_seed="$((BASE_SEED + repeat_index - 1))"
+          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id/repeat-$repeat_index"
+          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/repeat-$repeat_index"
           mkdir -p "$result_root"
           mkdir -p "$corpus_dir"
 
@@ -160,10 +187,19 @@ jobs:
               ;;
           esac
 
-          fuzz_args=("-max_total_time=${LONG_FUZZ_SECONDS}" "-print_final_stats=1")
-          if [[ -n "$FUZZ_SEED" ]]; then
-            fuzz_args+=("-seed=${FUZZ_SEED}")
-          fi
+          fuzz_args=("-print_final_stats=1" "-seed=${effective_seed}")
+          case "$STOP_MODE" in
+            seconds)
+              fuzz_args+=("-max_total_time=${STOP_VALUE}")
+              ;;
+            runs)
+              fuzz_args+=("-runs=${STOP_VALUE}")
+              ;;
+            *)
+              echo "unknown STOP_MODE=$STOP_MODE" >&2
+              exit 1
+              ;;
+          esac
 
           start_ts="$(date +%s)"
           status="success"
@@ -228,6 +264,7 @@ jobs:
           export TARGET_NAME="$target"
           export MODE_ID="$mode_id"
           export MODE_NAME="$mode_name"
+          export REPEAT_INDEX="$repeat_index"
           export RESULT_ROOT="$result_root"
           export FUZZ_STATUS="$status"
           export DURATION_S="$duration_s"
@@ -240,7 +277,7 @@ jobs:
           export FINAL_CORPUS_SIZE="$final_corpus_size"
           export RUSTFLAGS_USED="$rustflags"
           export ARTIFACT_COUNT="$artifact_count"
-          export FUZZ_SEED_USED="$FUZZ_SEED"
+          export FUZZ_SEED_USED="$effective_seed"
           export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
@@ -254,10 +291,12 @@ jobs:
               'target': os.environ['TARGET_NAME'],
               'mode_id': int(os.environ['MODE_ID']),
               'mode_name': os.environ['MODE_NAME'],
+              'repeat_index': int(os.environ['REPEAT_INDEX']),
               'status': os.environ['FUZZ_STATUS'],
               'duration_s': int(os.environ['DURATION_S']),
               'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
-              'seconds_per_target': int(os.environ['LONG_FUZZ_SECONDS']),
+              'stop_mode': os.environ['STOP_MODE'],
+              'stop_value': int(os.environ['STOP_VALUE']),
               'seed': int(os.environ['FUZZ_SEED_USED']) if os.environ['FUZZ_SEED_USED'] else None,
               'tested_commit': os.environ['TESTED_COMMIT'],
               'tested_commit_url': os.environ['TESTED_COMMIT_URL'],
@@ -281,10 +320,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}
+          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-repeat-${{ matrix.repeat_index }}
           path: |
-            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
-            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
+            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/repeat-${{ matrix.repeat_index }}
+            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/repeat-${{ matrix.repeat_index }}
           if-no-files-found: warn
 
   summarize:
@@ -310,15 +349,15 @@ jobs:
               data = json.loads(meta_path.read_text())
               rows.append(data)
 
-          rows.sort(key=lambda row: (row.get('target', ''), row.get('mode_id', 0)))
+          rows.sort(key=lambda row: (row.get('target', ''), row.get('repeat_index', 0), row.get('mode_id', 0)))
 
           summary_tsv = root / 'summary.tsv'
           with summary_tsv.open('w') as f:
-              f.write('target\tmode_id\tmode_name\tstatus\tcompleted_runs\tduration_s\tseconds_per_target\tseed\tfinal_cov\tfinal_ft\tfinal_corpus_count\tfinal_corpus_size\tfinal_exec_per_sec\tfinal_rss_mb\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
+              f.write('target\trepeat_index\tmode_id\tmode_name\tstatus\tcompleted_runs\tduration_s\tstop_mode\tstop_value\tseed\tfinal_cov\tfinal_ft\tfinal_corpus_count\tfinal_corpus_size\tfinal_exec_per_sec\tfinal_rss_mb\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
               for row in rows:
                   f.write(
-                      f"{row.get('target','')}\t{row.get('mode_id','')}\t{row.get('mode_name','')}\t{row.get('status','')}\t"
-                      f"{row.get('completed_runs','')}\t{row.get('duration_s','')}\t{row.get('seconds_per_target','')}\t{row.get('seed','')}\t"
+                      f"{row.get('target','')}\t{row.get('repeat_index','')}\t{row.get('mode_id','')}\t{row.get('mode_name','')}\t{row.get('status','')}\t"
+                      f"{row.get('completed_runs','')}\t{row.get('duration_s','')}\t{row.get('stop_mode','')}\t{row.get('stop_value','')}\t{row.get('seed','')}\t"
                       f"{row.get('final_cov','')}\t{row.get('final_ft','')}\t{row.get('final_corpus_count','')}\t{row.get('final_corpus_size','')}\t"
                       f"{row.get('final_exec_per_sec','')}\t{row.get('final_rss_mb','')}\t{row.get('tested_commit','')}\t{row.get('tested_commit_url','')}\t"
                       f"{row.get('rustflags','')}\t{row.get('artifact_count','')}\t{row.get('run_url','')}\t{row.get('job_url','')}\n"
@@ -331,20 +370,34 @@ jobs:
               f.write('# Compare Long Fuzz Modes rust-bitcoin\n\n')
               f.write(f"- target count: `{len({row.get('target') for row in rows}) if rows else 0}`\n")
               f.write(f"- mode count: `3`\n")
+              f.write(f"- repetition count: `{len({row.get('repeat_index') for row in rows}) if rows else 0}`\n")
               f.write(f"- successful jobs: `{ok}`\n")
               f.write(f"- failed jobs: `{failed}`\n\n")
               if rows:
                   f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n")
-                  seed = rows[0].get('seed')
-                  f.write(f"- seed: `{seed}`\n\n" if seed is not None else "- seed: random\n\n")
+                  f.write(f"- stop mode: `{rows[0].get('stop_mode','')}`\n")
+                  f.write(f"- stop value: `{rows[0].get('stop_value','')}`\n")
+                  seeds = [row.get('seed') for row in rows if row.get('seed') is not None]
+                  if seeds:
+                      f.write(f"- seed range: `{min(seeds)}..{max(seeds)}`\n\n")
+                  else:
+                      f.write("- seed range: random\n\n")
               current_target = None
+              current_repeat = None
               for row in rows:
                   target = row.get('target', '')
                   if target != current_target:
                       if current_target is not None:
                           f.write('\n')
                       current_target = target
-                      f.write(f"## `{target}`\n\n")
+                      current_repeat = None
+                      f.write(f"## `{target}`\n")
+                  repeat_index = row.get('repeat_index')
+                  if repeat_index != current_repeat:
+                      if current_repeat is not None:
+                          f.write('\n')
+                      current_repeat = repeat_index
+                      f.write(f"\n### repeat `{repeat_index}` seed `{row.get('seed','')}`\n\n")
                       f.write('| mode | status | runs | cov | ft | corpus | exec/s | rss (MB) | duration (s) | rustflags |\n')
                       f.write('| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |\n')
                   corpus = row.get('final_corpus_count')
