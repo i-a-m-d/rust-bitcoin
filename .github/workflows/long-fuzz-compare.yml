@@ -328,7 +328,6 @@ jobs:
             export RESULT_ROOT="$result_root"
             export FUZZ_STATUS="$status"
             export DURATION_S="$duration_s"
-            export FUZZ_DURATION_S="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get(\"fuzz_duration_s\") or \"\"))' "$metrics_json")"
             export COMPLETED_RUNS="$completed_runs"
             export FINAL_COV="$final_cov"
             export FINAL_FT="$final_ft"
@@ -341,6 +340,7 @@ jobs:
             export FUZZ_SEED_USED="$effective_seed"
             export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            export METRICS_JSON="$metrics_json"
 
             python3 - <<'PY'
           import json
@@ -348,6 +348,7 @@ jobs:
           import pathlib
 
           result_root = pathlib.Path(os.environ['RESULT_ROOT'])
+          metrics = json.loads(os.environ['METRICS_JSON'])
           payload = {
               'target': os.environ['TARGET_NAME'],
               'mode_id': int(os.environ['MODE_ID']),
@@ -355,7 +356,7 @@ jobs:
               'run_index': int(os.environ['RUN_INDEX']),
               'status': os.environ['FUZZ_STATUS'],
               'job_duration_s': int(os.environ['DURATION_S']),
-              'fuzz_duration_s': int(os.environ['FUZZ_DURATION_S']) if os.environ['FUZZ_DURATION_S'] else None,
+              'fuzz_duration_s': metrics.get('fuzz_duration_s'),
               'completed_runs': int(os.environ['COMPLETED_RUNS']) if os.environ['COMPLETED_RUNS'] else None,
               'stop_mode': os.environ['STOP_MODE'],
               'stop_value': int(os.environ['STOP_VALUE']),
