@@ -53,7 +53,7 @@ jobs:
               entries.append({
                   'artifact_name': meta_path.parent.name,
                   'target': data['target'],
-                  'repeat_index': data['repeat_index'],
+                  'run_index': data['run_index'],
                   'mode_id': data['mode_id'],
                   'mode_name': data['mode_name'],
                   'rustflags': data.get('rustflags', ''),
@@ -110,11 +110,11 @@ jobs:
 
           target="${{ matrix.target }}"
           mode_id="${{ matrix.mode_id }}"
-          repeat_index="${{ matrix.repeat_index }}"
+          run_index="${{ matrix.run_index }}"
           mode_name="${{ matrix.mode_name }}"
           rustflags="${{ matrix.rustflags }}"
-          corpus_dir="$GITHUB_WORKSPACE/compare-input/long-fuzz-corpus/$target/mode-$mode_id/repeat-$repeat_index"
-          report_root="$GITHUB_WORKSPACE/coverage-report/$target/mode-$mode_id/repeat-$repeat_index"
+          corpus_dir="$GITHUB_WORKSPACE/compare-input/long-fuzz-corpus/$target/mode-$mode_id/run-$run_index"
+          report_root="$GITHUB_WORKSPACE/coverage-report/$target/mode-$mode_id/run-$run_index"
           mkdir -p "$report_root"
 
           if [[ ! -d "$corpus_dir" ]]; then
@@ -143,10 +143,10 @@ jobs:
           import json
           import pathlib
 
-          report_root = pathlib.Path('coverage-report') / '${{ matrix.target }}' / 'mode-${{ matrix.mode_id }}' / 'repeat-${{ matrix.repeat_index }}'
+          report_root = pathlib.Path('coverage-report') / '${{ matrix.target }}' / 'mode-${{ matrix.mode_id }}' / 'run-${{ matrix.run_index }}'
           meta = {
               'target': '${{ matrix.target }}',
-              'repeat_index': int('${{ matrix.repeat_index }}'),
+              'run_index': int('${{ matrix.run_index }}'),
               'mode_id': int('${{ matrix.mode_id }}'),
               'mode_name': '${{ matrix.mode_name }}',
               'rustflags': '${{ matrix.rustflags }}',
@@ -159,8 +159,8 @@ jobs:
       - name: Upload coverage reports
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-coverage-${{ matrix.target }}-mode-${{ matrix.mode_id }}-repeat-${{ matrix.repeat_index }}
-          path: coverage-report/${{ matrix.target }}/mode-${{ matrix.mode_id }}/repeat-${{ matrix.repeat_index }}
+          name: long-fuzz-coverage-${{ matrix.target }}-mode-${{ matrix.mode_id }}-run-${{ matrix.run_index }}
+          path: coverage-report/${{ matrix.target }}/mode-${{ matrix.mode_id }}/run-${{ matrix.run_index }}
 
   summarize:
     if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && needs.prepare.outputs.entry_count != '0' }}
@@ -194,14 +194,14 @@ jobs:
                   'branch_percent': total.get('branches', {}).get('percent'),
               })
 
-          rows.sort(key=lambda row: (row['target'], row['repeat_index'], row['mode_id']))
+          rows.sort(key=lambda row: (row['target'], row['run_index'], row['mode_id']))
 
           summary_tsv = root / 'summary.tsv'
           with summary_tsv.open('w') as f:
-              f.write('target\trepeat_index\tmode_id\tmode_name\tline_percent\tfunction_percent\tregion_percent\tbranch_percent\ttested_commit\ttested_commit_url\tcompare_run_id\trustflags\n')
+              f.write('target\trun_index\tmode_id\tmode_name\tline_percent\tfunction_percent\tregion_percent\tbranch_percent\ttested_commit\ttested_commit_url\tcompare_run_id\trustflags\n')
               for row in rows:
                   f.write(
-                      f"{row['target']}\t{row['repeat_index']}\t{row['mode_id']}\t{row['mode_name']}\t{row['line_percent']}\t{row['function_percent']}\t{row['region_percent']}\t{row.get('branch_percent','')}\t"
+                      f"{row['target']}\t{row['run_index']}\t{row['mode_id']}\t{row['mode_name']}\t{row['line_percent']}\t{row['function_percent']}\t{row['region_percent']}\t{row.get('branch_percent','')}\t"
                       f"{row['tested_commit']}\t{row['tested_commit_url']}\t{row['compare_run_id']}\t{row['rustflags']}\n"
                   )
 
@@ -212,19 +212,19 @@ jobs:
                   f.write(f"- compare run id: `{rows[0]['compare_run_id']}`\n")
                   f.write(f"- tested commit: [`{rows[0]['tested_commit']}`]({rows[0]['tested_commit_url']})\n\n")
               current_target = None
-              current_repeat = None
+              current_run = None
               for row in rows:
                   if row['target'] != current_target:
                       if current_target is not None:
                           f.write('\n')
                       current_target = row['target']
-                      current_repeat = None
+                      current_run = None
                       f.write(f"## `{current_target}`\n")
-                  if row['repeat_index'] != current_repeat:
-                      if current_repeat is not None:
+                  if row['run_index'] != current_run:
+                      if current_run is not None:
                           f.write('\n')
-                      current_repeat = row['repeat_index']
-                      f.write(f"\n### repeat `{current_repeat}`\n\n")
+                      current_run = row['run_index']
+                      f.write(f"\n### run `{current_run}`\n\n")
                       f.write('| mode | lines % | functions % | regions % | branches % | rustflags |\n')
                       f.write('| --- | ---: | ---: | ---: | ---: | --- |\n')
                   f.write(

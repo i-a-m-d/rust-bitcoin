@@ -17,13 +17,13 @@ on:
         required: false
         default: '19200'
         type: string
-      repeat_count:
-        description: 'How many repetitions to queue. New jobs start as slots clear.'
+      run_count:
+        description: 'How many runs to queue. New jobs start as slots clear.'
         required: false
         default: '1'
         type: string
       base_seed:
-        description: 'Base libFuzzer seed. Repetition N uses base_seed + N - 1.'
+        description: 'Base libFuzzer seed. Run N uses base_seed + N - 1.'
         required: false
         default: '1'
         type: string
@@ -51,7 +51,7 @@ jobs:
       stop_mode: ${{ steps.config.outputs.stop_mode }}
       stop_value: ${{ steps.config.outputs.stop_value }}
       base_seed: ${{ steps.config.outputs.base_seed }}
-      repeat_indexes: ${{ steps.config.outputs.repeat_indexes }}
+      run_indexes: ${{ steps.config.outputs.run_indexes }}
       tested_commit: ${{ steps.commit.outputs.tested_commit }}
       tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
     steps:
@@ -72,10 +72,10 @@ jobs:
           echo "base_seed=${{ github.event.inputs.base_seed || '1' }}" >> "$GITHUB_OUTPUT"
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          count = int("${{ github.event.inputs.repeat_count || '1' }}")
+          count = int("${{ github.event.inputs.run_count || '1' }}")
           if count < 1:
-              raise SystemExit("repeat_count must be >= 1")
-          print(f"repeat_indexes={json.dumps(list(range(1, count + 1)))}")
+              raise SystemExit("run_count must be >= 1")
+          print(f"run_indexes={json.dumps(list(range(1, count + 1)))}")
           PY
       - id: commit
         run: |
@@ -120,8 +120,8 @@ jobs:
       max-parallel: 20
       matrix:
         fuzz_target: ${{ fromJson(needs.discover.outputs.fuzz_targets) }}
-        mode_id: [1, 2, 3]
-        repeat_index: ${{ fromJson(needs.discover.outputs.repeat_indexes) }}
+        mode_id: [1, 2, 3, 4]
+        run_index: ${{ fromJson(needs.discover.outputs.run_indexes) }}
     env:
       RUST_BACKTRACE: '1'
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
@@ -161,10 +161,10 @@ jobs:
 
           target="${{ matrix.fuzz_target }}"
           mode_id="${{ matrix.mode_id }}"
-          repeat_index="${{ matrix.repeat_index }}"
-          effective_seed="$((BASE_SEED + repeat_index - 1))"
-          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id/repeat-$repeat_index"
-          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/repeat-$repeat_index"
+          run_index="${{ matrix.run_index }}"
+          effective_seed="$((BASE_SEED + run_index - 1))"
+          result_root="$GITHUB_WORKSPACE/long-fuzz-result/$target/mode-$mode_id/run-$run_index"
+          corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/run-$run_index"
           mkdir -p "$result_root"
           mkdir -p "$corpus_dir"
 
@@ -180,6 +180,10 @@ jobs:
             3)
               mode_name="hashes_fuzz+secp256k1_fuzz"
               rustflags="--cfg=hashes_fuzz --cfg=secp256k1_fuzz"
+              ;;
+            4)
+              mode_name="hashes_fuzz"
+              rustflags="--cfg=hashes_fuzz"
               ;;
             *)
               echo "unknown mode_id=$mode_id" >&2
@@ -264,7 +268,7 @@ jobs:
           export TARGET_NAME="$target"
           export MODE_ID="$mode_id"
           export MODE_NAME="$mode_name"
-          export REPEAT_INDEX="$repeat_index"
+          export RUN_INDEX="$run_index"
           export RESULT_ROOT="$result_root"
           export FUZZ_STATUS="$status"
           export DURATION_S="$duration_s"
@@ -292,7 +296,7 @@ jobs:
               'target': os.environ['TARGET_NAME'],
               'mode_id': int(os.environ['MODE_ID']),
               'mode_name': os.environ['MODE_NAME'],
-              'repeat_index': int(os.environ['REPEAT_INDEX']),
+              'run_index': int(os.environ['RUN_INDEX']),
               'status': os.environ['FUZZ_STATUS'],
               'job_duration_s': int(os.environ['DURATION_S']),
               'fuzz_duration_s': int(os.environ['FUZZ_DURATION_S']) if os.environ['FUZZ_DURATION_S'] else None,
@@ -322,10 +326,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-repeat-${{ matrix.repeat_index }}
+          name: long-fuzz-compare-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-run-${{ matrix.run_index }}
           path: |
-            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/repeat-${{ matrix.repeat_index }}
-            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/repeat-${{ matrix.repeat_index }}
+            long-fuzz-result/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/run-${{ matrix.run_index }}
+            long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}/run-${{ matrix.run_index }}
           if-no-files-found: warn
 
   summarize:
@@ -352,14 +356,14 @@ jobs:
               data = json.loads(meta_path.read_text())
               rows.append(data)
 
-          rows.sort(key=lambda row: (row.get('target', ''), row.get('repeat_index', 0), row.get('mode_id', 0)))
+          rows.sort(key=lambda row: (row.get('target', ''), row.get('run_index', 0), row.get('mode_id', 0)))
 
           summary_tsv = root / 'summary.tsv'
           with summary_tsv.open('w') as f:
-              f.write('target\trepeat_index\tmode_id\tmode_name\tstatus\tcompleted_runs\tjob_duration_s\tfuzz_duration_s\tstop_mode\tstop_value\tseed\tfinal_cov\tfinal_ft\tfinal_corpus_count\tfinal_corpus_size\tfinal_exec_per_sec\tfinal_rss_mb\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
+              f.write('target\trun_index\tmode_id\tmode_name\tstatus\tcompleted_runs\tjob_duration_s\tfuzz_duration_s\tstop_mode\tstop_value\tseed\tfinal_cov\tfinal_ft\tfinal_corpus_count\tfinal_corpus_size\tfinal_exec_per_sec\tfinal_rss_mb\ttested_commit\ttested_commit_url\trustflags\tartifact_count\trun_url\tjob_url\n')
               for row in rows:
                   f.write(
-                      f"{row.get('target','')}\t{row.get('repeat_index','')}\t{row.get('mode_id','')}\t{row.get('mode_name','')}\t{row.get('status','')}\t"
+                      f"{row.get('target','')}\t{row.get('run_index','')}\t{row.get('mode_id','')}\t{row.get('mode_name','')}\t{row.get('status','')}\t"
                       f"{row.get('completed_runs','')}\t{row.get('job_duration_s','')}\t{row.get('fuzz_duration_s','')}\t{row.get('stop_mode','')}\t{row.get('stop_value','')}\t{row.get('seed','')}\t"
                       f"{row.get('final_cov','')}\t{row.get('final_ft','')}\t{row.get('final_corpus_count','')}\t{row.get('final_corpus_size','')}\t"
                       f"{row.get('final_exec_per_sec','')}\t{row.get('final_rss_mb','')}\t{row.get('tested_commit','')}\t{row.get('tested_commit_url','')}\t"
@@ -381,10 +385,10 @@ jobs:
 
           mode_groups = defaultdict(list)
           for row in rows:
-              mode_groups[row.get('mode_id')].append(row)
+              mode_groups[(row.get('target'), row.get('mode_id'))].append(row)
 
           overview = []
-          for mode_id, group in sorted(mode_groups.items()):
+          for (target, mode_id), group in sorted(mode_groups.items()):
               def average(field):
                   values = [row.get(field) for row in group if row.get(field) is not None]
                   if not values:
@@ -392,38 +396,47 @@ jobs:
                   return sum(values) / len(values)
 
               overview.append({
+                  'target': target,
                   'mode_id': mode_id,
                   'mode_name': group[0].get('mode_name', ''),
                   'successful_jobs': sum(1 for row in group if row.get('status') == 'success'),
                   'failed_jobs': sum(1 for row in group if row.get('status') != 'success'),
+                  'avg_job_duration_s': average('job_duration_s'),
+                  'avg_fuzz_duration_s': average('fuzz_duration_s'),
                   'avg_final_ft': average('final_ft'),
                   'avg_final_cov': average('final_cov'),
                   'avg_final_corpus_count': average('final_corpus_count'),
                   'avg_final_exec_per_sec': average('final_exec_per_sec'),
               })
 
-          ft_rank = rank_desc(overview, lambda item: item['avg_final_ft'] if item['avg_final_ft'] is not None else float('-inf'))
-          cov_rank = rank_desc(overview, lambda item: item['avg_final_cov'] if item['avg_final_cov'] is not None else float('-inf'))
-          corpus_rank = rank_desc(overview, lambda item: item['avg_final_corpus_count'] if item['avg_final_corpus_count'] is not None else float('-inf'))
-          exec_rank = rank_desc(overview, lambda item: item['avg_final_exec_per_sec'] if item['avg_final_exec_per_sec'] is not None else float('-inf'))
-
+          overview_by_target = defaultdict(list)
           for item in overview:
-              item['ft_rank'] = ft_rank[item['mode_id']]
-              item['cov_rank'] = cov_rank[item['mode_id']]
-              item['corpus_rank'] = corpus_rank[item['mode_id']]
-              item['exec_rank'] = exec_rank[item['mode_id']]
-              item['overall_rank_score'] = item['ft_rank'] + item['cov_rank'] + item['corpus_rank'] + item['exec_rank']
+              overview_by_target[item['target']].append(item)
 
-          overall_rank = rank_desc(overview, lambda item: -item['overall_rank_score'])
-          for item in overview:
-              item['overall_rank'] = overall_rank[item['mode_id']]
+          for target, items in overview_by_target.items():
+              ft_rank = rank_desc(items, lambda item: item['avg_final_ft'] if item['avg_final_ft'] is not None else float('-inf'))
+              cov_rank = rank_desc(items, lambda item: item['avg_final_cov'] if item['avg_final_cov'] is not None else float('-inf'))
+              corpus_rank = rank_desc(items, lambda item: item['avg_final_corpus_count'] if item['avg_final_corpus_count'] is not None else float('-inf'))
+              exec_rank = rank_desc(items, lambda item: item['avg_final_exec_per_sec'] if item['avg_final_exec_per_sec'] is not None else float('-inf'))
+
+              for item in items:
+                  item['ft_rank'] = ft_rank[item['mode_id']]
+                  item['cov_rank'] = cov_rank[item['mode_id']]
+                  item['corpus_rank'] = corpus_rank[item['mode_id']]
+                  item['exec_rank'] = exec_rank[item['mode_id']]
+                  item['overall_rank_score'] = item['ft_rank'] + item['cov_rank'] + item['corpus_rank'] + item['exec_rank']
+
+              overall_rank = rank_desc(items, lambda item: -item['overall_rank_score'])
+              for item in items:
+                  item['overall_rank'] = overall_rank[item['mode_id']]
 
           overview_tsv = root / 'overview.tsv'
           with overview_tsv.open('w') as f:
-              f.write('mode_id\tmode_name\tsuccessful_jobs\tfailed_jobs\tavg_final_ft\tft_rank\tavg_final_cov\tcov_rank\tavg_final_corpus_count\tcorpus_rank\tavg_final_exec_per_sec\texec_rank\toverall_rank_score\toverall_rank\n')
-              for item in sorted(overview, key=lambda entry: (entry['overall_rank'], entry['mode_id'])):
+              f.write('target\tmode_id\tmode_name\tsuccessful_jobs\tfailed_jobs\tavg_job_duration_s\tavg_fuzz_duration_s\tavg_final_ft\tft_rank\tavg_final_cov\tcov_rank\tavg_final_corpus_count\tcorpus_rank\tavg_final_exec_per_sec\texec_rank\toverall_rank_score\toverall_rank\n')
+              for item in sorted(overview, key=lambda entry: (entry['target'], entry['overall_rank'], entry['mode_id'])):
                   f.write(
-                      f"{item['mode_id']}\t{item['mode_name']}\t{item['successful_jobs']}\t{item['failed_jobs']}\t"
+                      f"{item['target']}\t{item['mode_id']}\t{item['mode_name']}\t{item['successful_jobs']}\t{item['failed_jobs']}\t"
+                      f"{item['avg_job_duration_s']:.2f}\t{item['avg_fuzz_duration_s']:.2f}\t"
                       f"{item['avg_final_ft']:.2f}\t{item['ft_rank']}\t"
                       f"{item['avg_final_cov']:.2f}\t{item['cov_rank']}\t"
                       f"{item['avg_final_corpus_count']:.2f}\t{item['corpus_rank']}\t"
@@ -437,8 +450,8 @@ jobs:
           with summary_md.open('w') as f:
               f.write('# Compare Long Fuzz Modes rust-bitcoin\n\n')
               f.write(f"- target count: `{len({row.get('target') for row in rows}) if rows else 0}`\n")
-              f.write(f"- mode count: `3`\n")
-              f.write(f"- repetition count: `{len({row.get('repeat_index') for row in rows}) if rows else 0}`\n")
+              f.write(f"- mode count: `{len({row.get('mode_id') for row in rows}) if rows else 0}`\n")
+              f.write(f"- run count: `{len({row.get('run_index') for row in rows}) if rows else 0}`\n")
               f.write(f"- successful jobs: `{ok}`\n")
               f.write(f"- failed jobs: `{failed}`\n\n")
               if rows:
@@ -452,11 +465,12 @@ jobs:
                       f.write("- seed range: random\n\n")
               if overview:
                   f.write('## Mode overview\n\n')
-                  f.write('| mode | successful jobs | failed jobs | Avg `ft` | `ft` rank | Avg `cov` | `cov` rank | Avg corpus count | corpus rank | Avg `exec/s` | `exec/s` rank | Overall |\n')
-                  f.write('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
-                  for item in sorted(overview, key=lambda entry: (entry['overall_rank'], entry['mode_id'])):
+                  f.write('| target | mode | successful jobs | failed jobs | Avg job duration (s) | Avg fuzzing duration (s) | Avg `ft` | `ft` rank | Avg `cov` | `cov` rank | Avg corpus count | corpus rank | Avg `exec/s` | `exec/s` rank | Overall |\n')
+                  f.write('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
+                  for item in sorted(overview, key=lambda entry: (entry['target'], entry['overall_rank'], entry['mode_id'])):
                       f.write(
-                          f"| `{item['mode_id']}: {item['mode_name']}` | {item['successful_jobs']} | {item['failed_jobs']} | "
+                          f"| `{item['target']}` | `{item['mode_id']}: {item['mode_name']}` | {item['successful_jobs']} | {item['failed_jobs']} | "
+                          f"{item['avg_job_duration_s']:.2f} | {item['avg_fuzz_duration_s']:.2f} | "
                           f"{item['avg_final_ft']:.2f} | {item['ft_rank']} | "
                           f"{item['avg_final_cov']:.2f} | {item['cov_rank']} | "
                           f"{item['avg_final_corpus_count']:.2f} | {item['corpus_rank']} | "
@@ -464,21 +478,21 @@ jobs:
                       )
                   f.write('\n')
               current_target = None
-              current_repeat = None
+              current_run = None
               for row in rows:
                   target = row.get('target', '')
                   if target != current_target:
                       if current_target is not None:
                           f.write('\n')
                       current_target = target
-                      current_repeat = None
+                      current_run = None
                       f.write(f"## `{target}`\n")
-                  repeat_index = row.get('repeat_index')
-                  if repeat_index != current_repeat:
-                      if current_repeat is not None:
+                  run_index = row.get('run_index')
+                  if run_index != current_run:
+                      if current_run is not None:
                           f.write('\n')
-                      current_repeat = repeat_index
-                      f.write(f"\n### repeat `{repeat_index}` seed `{row.get('seed','')}`\n\n")
+                      current_run = run_index
+                      f.write(f"\n### run `{run_index}` seed `{row.get('seed','')}`\n\n")
                       f.write('| mode | status | runs | cov | ft | corpus | exec/s | rss (MB) | Job duration (s) | Fuzzing duration (s) | rustflags |\n')
                       f.write('| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |\n')
                   corpus = row.get('final_corpus_count')
