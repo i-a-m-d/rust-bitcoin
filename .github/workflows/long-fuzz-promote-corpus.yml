@@ -1,7 +1,7 @@
 name: Promote Long Fuzz Corpus rust-bitcoin
 run-name: >-
-  Promote Long Fuzz Corpus: compare run ${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}
-  / branch=${{ inputs.branch_name || github.event.inputs.branch_name || 'fuzz-corpora' }}
+  Promote Long Fuzz Corpus: compare run ${{ github.event.inputs.compare_run_id }}
+  / branch=${{ github.event.inputs.branch_name || 'fuzz-corpora' }}
 
 on:
   workflow_dispatch:
@@ -17,19 +17,6 @@ on:
         type: string
       branch_name:
         description: 'Branch used to store canonical corpora.'
-        required: false
-        default: 'fuzz-corpora'
-        type: string
-  workflow_call:
-    inputs:
-      compare_run_id:
-        required: true
-        type: string
-      targets:
-        required: false
-        default: ''
-        type: string
-      branch_name:
         required: false
         default: 'fuzz-corpora'
         type: string
@@ -55,13 +42,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}
+          run-id: ${{ github.event.inputs.compare_run_id }}
           path: compare-artifacts
           pattern: long-fuzz-compare-data-*
 
       - id: plan
         env:
-          TARGET_FILTER: ${{ inputs.targets || github.event.inputs.targets || '' }}
+          TARGET_FILTER: ${{ github.event.inputs.targets || '' }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -115,8 +102,8 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
-      CORPUS_BRANCH: ${{ inputs.branch_name || github.event.inputs.branch_name || 'fuzz-corpora' }}
-      COMPARE_RUN_ID: ${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}
+      CORPUS_BRANCH: ${{ github.event.inputs.branch_name || 'fuzz-corpora' }}
+      COMPARE_RUN_ID: ${{ github.event.inputs.compare_run_id }}
     steps:
       - name: Install test dependencies
         run: sudo apt-get update -y && sudo apt-get install -y binutils-dev libunwind8-dev libcurl4-openssl-dev libelf-dev libdw-dev cmake gcc libiberty-dev
@@ -426,7 +413,7 @@ jobs:
     permissions:
       contents: write
     env:
-      CORPUS_BRANCH: ${{ inputs.branch_name || github.event.inputs.branch_name || 'fuzz-corpora' }}
+      CORPUS_BRANCH: ${{ github.event.inputs.branch_name || 'fuzz-corpora' }}
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -485,8 +472,8 @@ jobs:
           summary_md = pathlib.Path('promotion-summary.md')
 
           payload = {
-              'compare_run_id': '${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}',
-              'branch_name': '${{ inputs.branch_name || github.event.inputs.branch_name || "fuzz-corpora" }}',
+              'compare_run_id': '${{ github.event.inputs.compare_run_id }}',
+              'branch_name': '${{ github.event.inputs.branch_name || "fuzz-corpora" }}',
               'modes': rows,
           }
           summary_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
@@ -497,8 +484,8 @@ jobs:
               return f"{value:.{digits}f}"
 
           lines = ['# Long Fuzz Corpus Promotion Summary', '']
-          lines.append(f"- compare run id: `${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}`")
-          lines.append(f"- corpus branch: `${{ inputs.branch_name || github.event.inputs.branch_name || 'fuzz-corpora' }}`")
+          lines.append(f"- compare run id: `${{ github.event.inputs.compare_run_id }}`")
+          lines.append(f"- corpus branch: `${{ github.event.inputs.branch_name || 'fuzz-corpora' }}`")
           lines.append('')
           lines.append('| target | mode | success runs | failed runs | seed files before | candidate files | seed files after | line % before | line % candidate | line % after | line % / byte after |')
           lines.append('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
@@ -528,14 +515,14 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "Update fuzz corpora from compare run ${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}"
+          git commit -m "Update fuzz corpora from compare run ${{ github.event.inputs.compare_run_id }}"
           git push origin "HEAD:$CORPUS_BRANCH"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload promotion summary
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: long-fuzz-corpus-promotion-${{ inputs.compare_run_id || github.event.inputs.compare_run_id }}
+          name: long-fuzz-corpus-promotion-${{ github.event.inputs.compare_run_id }}
           path: |
             promotion-summary.json
             promotion-summary.md

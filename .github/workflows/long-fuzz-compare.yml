@@ -658,9 +658,20 @@ jobs:
   auto-promote-corpus:
     if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') }}
     needs: [discover, fuzz, summarize]
-    uses: ./.github/workflows/long-fuzz-promote-corpus.yml
-    with:
-      compare_run_id: ${{ github.run_id }}
-      targets: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
-      branch_name: ${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}
-    secrets: inherit
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Trigger corpus promotion workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            repos/${{ github.repository }}/actions/workflows/long-fuzz-promote-corpus.yml/dispatches \
+            -f ref='${{ github.ref_name }}' \
+            -f inputs[compare_run_id]='${{ github.run_id }}' \
+            -f inputs[targets]='${{ github.event.inputs.targets || "bitcoin_arbitrary_psbt" }}' \
+            -f inputs[branch_name]='${{ github.event.inputs.promotion_branch || "fuzz-corpora" }}'
