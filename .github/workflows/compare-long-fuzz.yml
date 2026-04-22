@@ -673,5 +673,5 @@ jobs:
             repos/${{ github.repository }}/actions/workflows/long-fuzz-promote-corpus.yml/dispatches \
             -f ref='${{ github.ref_name }}' \
             -f inputs[compare_run_id]='${{ github.run_id }}' \
-            -f inputs[targets]='${{ github.event.inputs.targets || "bitcoin_arbitrary_psbt" }}' \
-            -f inputs[branch_name]='${{ github.event.inputs.promotion_branch || "fuzz-corpora" }}'
+            -f inputs[targets]='${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}' \
+            -f inputs[branch_name]='${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}'

@@ -473,7 +473,7 @@ jobs:
 
           payload = {
               'compare_run_id': '${{ github.event.inputs.compare_run_id }}',
-              'branch_name': '${{ github.event.inputs.branch_name || "fuzz-corpora" }}',
+              'branch_name': '${{ github.event.inputs.branch_name || 'fuzz-corpora' }}',
               'modes': rows,
           }
           summary_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
