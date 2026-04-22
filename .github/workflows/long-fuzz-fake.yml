@@ -108,14 +108,14 @@ jobs:
           repository: rust-bitcoin/rust-bitcoin
           ref: master
           persist-credentials: false
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         with:
           path: |
             ~/.cargo/bin
             fuzz/target
             target
           key: fork-long-fuzz-build-${{ runner.os }}-${{ env.FUZZ_NIGHTLY }}-${{ hashFiles('**/Cargo.toml','**/Cargo.lock') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         with:
           path: fuzz/corpus/${{ matrix.fuzz_target }}
           key: fork-long-fuzz-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-${{ github.run_id }}
@@ -209,7 +209,7 @@ jobs:
           fi
       - name: Upload per-target results
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: long-fuzz-fake-${{ matrix.fuzz_target }}
           path: long-fuzz-result/${{ matrix.fuzz_target }}
@@ -222,7 +222,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: long-fuzz-download
           pattern: long-fuzz-fake-*
@@ -277,7 +277,7 @@ jobs:
       - name: Publish job summary
         run: cat long-fuzz-download/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload consolidated summary
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: long-fuzz-fake-summary
           path: |
