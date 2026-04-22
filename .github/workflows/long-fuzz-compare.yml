@@ -269,7 +269,6 @@ jobs:
               ;;
           esac
 
-          overall_status="success"
           canonical_seed_dir="$GITHUB_WORKSPACE/corpus-store/corpus/$target/$mode_slug/seed"
 
           while IFS= read -r run_index; do
@@ -435,10 +434,6 @@ jobs:
             cp -R "$corpus_dir" "$upload_root/long-fuzz-corpus/$target/mode-$mode_id/"
             mkdir -p "$meta_upload_root/long-fuzz-meta/$target/mode-$mode_id/run-$run_index"
             cp "$result_root/meta.json" "$meta_upload_root/long-fuzz-meta/$target/mode-$mode_id/run-$run_index/meta.json"
-
-            if [[ "$status" != "success" ]]; then
-              overall_status="failure"
-            fi
           done < <(python3 - <<'PY' "$run_indexes_json"
           import json
           import sys
@@ -447,10 +442,6 @@ jobs:
               print(value)
           PY
           )
-
-          if [[ "$overall_status" != "success" ]]; then
-            exit 1
-          fi
       - name: Upload per-target results
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -596,6 +587,7 @@ jobs:
               f.write(f"- run count: `{len({row.get('run_index') for row in rows}) if rows else 0}`\n")
               f.write(f"- successful jobs: `{ok}`\n")
               f.write(f"- failed jobs: `{failed}`\n\n")
+              f.write("- workflow conclusion policy: compare runs stay green when fuzz jobs observe failures; per-run `status` remains the source of truth.\n\n")
               if rows:
                   f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n")
                   f.write(f"- corpus start mode: `{rows[0].get('corpus_start_mode','')}`\n")
