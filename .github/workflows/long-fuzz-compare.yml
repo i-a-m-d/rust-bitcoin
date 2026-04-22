@@ -2,6 +2,7 @@
 name: Compare Long Fuzz Modes rust-bitcoin
 run-name: >-
   Compare Long Fuzz Modes: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
+  / corpus=${{ github.event.inputs.corpus_start_mode || 'seed' }}
   / ${{ github.event.inputs.stop_mode || 'seconds' }}=${{ github.event.inputs.stop_value || '19200' }}
   / runs=${{ github.event.inputs.run_count || '1' }}
 
@@ -31,6 +32,24 @@ on:
         required: false
         default: '1'
         type: string
+      corpus_start_mode:
+        description: 'Start each run from the canonical seed corpus or from empty.'
+        required: false
+        default: 'seed'
+        type: choice
+        options:
+          - seed
+          - empty
+      auto_promote_corpus:
+        description: 'Automatically trigger corpus promotion after the compare run.'
+        required: false
+        default: false
+        type: boolean
+      promotion_branch:
+        description: 'Branch used to store canonical corpora when auto-promote is enabled.'
+        required: false
+        default: 'fuzz-corpora'
+        type: string
       targets:
         description: 'Comma-separated target list. Defaults to bitcoin_arbitrary_psbt.'
         required: false
@@ -54,6 +73,7 @@ jobs:
       stop_mode: ${{ steps.config.outputs.stop_mode }}
       stop_value: ${{ steps.config.outputs.stop_value }}
       base_seed: ${{ steps.config.outputs.base_seed }}
+      corpus_start_mode: ${{ steps.config.outputs.corpus_start_mode }}
       run_count: ${{ steps.config.outputs.run_count }}
       tested_commit: ${{ steps.commit.outputs.tested_commit }}
       tested_commit_url: ${{ steps.commit.outputs.tested_commit_url }}
@@ -75,6 +95,7 @@ jobs:
           echo "stop_mode=${{ github.event.inputs.stop_mode || 'seconds' }}" >> "$GITHUB_OUTPUT"
           echo "stop_value=${{ github.event.inputs.stop_value || '19200' }}" >> "$GITHUB_OUTPUT"
           echo "base_seed=${{ github.event.inputs.base_seed || '1' }}" >> "$GITHUB_OUTPUT"
+          echo "corpus_start_mode=${{ github.event.inputs.corpus_start_mode || 'seed' }}" >> "$GITHUB_OUTPUT"
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           count = int("${{ github.event.inputs.run_count || '1' }}")
           if count < 1:
@@ -169,6 +190,8 @@ jobs:
     env:
       RUST_BACKTRACE: '1'
       FUZZ_NIGHTLY: 'nightly-2026-03-27'
+      CORPUS_BRANCH: 'fuzz-corpora'
+      CORPUS_START_MODE: ${{ needs.discover.outputs.corpus_start_mode }}
       STOP_MODE: ${{ needs.discover.outputs.stop_mode }}
       STOP_VALUE: ${{ needs.discover.outputs.stop_value }}
       BASE_SEED: ${{ needs.discover.outputs.base_seed }}
@@ -189,15 +212,21 @@ jobs:
             fuzz/target
             target
           key: fork-long-fuzz-compare-build-${{ runner.os }}-${{ env.FUZZ_NIGHTLY }}-${{ hashFiles('**/Cargo.toml','**/Cargo.lock') }}
-      - uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
-        with:
-          path: long-fuzz-corpus/${{ matrix.fuzz_target }}/mode-${{ matrix.mode_id }}
-          key: fork-long-fuzz-compare-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-${{ github.run_id }}
-          restore-keys: |
-            fork-long-fuzz-compare-corpus-${{ github.repository }}-${{ matrix.fuzz_target }}-mode-${{ matrix.mode_id }}-
       - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
         with:
           toolchain: nightly-2026-03-27
+      - name: Fetch canonical corpus branch
+        if: ${{ env.CORPUS_START_MODE == 'seed' }}
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          repo_url="${{ github.server_url }}/${REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" "$CORPUS_BRANCH" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "$CORPUS_BRANCH" "$repo_url" corpus-store
+          else
+            mkdir -p corpus-store/corpus
+          fi
       - name: Run long fuzz target comparison mode
         run: |
           set -euo pipefail
@@ -216,18 +245,22 @@ jobs:
           case "$mode_id" in
             1)
               mode_name="real"
+              mode_slug="real"
               rustflags=""
               ;;
             2)
               mode_name="secp256k1_fuzz"
+              mode_slug="secp256k1-fuzz"
               rustflags="--cfg=secp256k1_fuzz"
               ;;
             3)
               mode_name="hashes_fuzz+secp256k1_fuzz"
+              mode_slug="hashes-fuzz-secp256k1-fuzz"
               rustflags="--cfg=hashes_fuzz --cfg=secp256k1_fuzz"
               ;;
             4)
               mode_name="hashes_fuzz"
+              mode_slug="hashes-fuzz"
               rustflags="--cfg=hashes_fuzz"
               ;;
             *)
@@ -237,6 +270,7 @@ jobs:
           esac
 
           overall_status="success"
+          canonical_seed_dir="$GITHUB_WORKSPACE/corpus-store/corpus/$target/$mode_slug/seed"
 
           while IFS= read -r run_index; do
             effective_seed="$((BASE_SEED + run_index - 1))"
@@ -244,6 +278,16 @@ jobs:
             corpus_dir="$GITHUB_WORKSPACE/long-fuzz-corpus/$target/mode-$mode_id/run-$run_index"
             mkdir -p "$result_root"
             mkdir -p "$corpus_dir"
+
+            seed_file_count=0
+            seed_source="empty"
+            if [[ "$CORPUS_START_MODE" == "seed" && -d "$canonical_seed_dir" ]]; then
+              seed_file_count="$(find "$canonical_seed_dir" -type f | wc -l | tr -d ' ')"
+              if [[ "$seed_file_count" != "0" ]]; then
+                cp -R "$canonical_seed_dir"/. "$corpus_dir"/
+                seed_source="$CORPUS_BRANCH"
+              fi
+            fi
 
             fuzz_args=("-print_final_stats=1" "-seed=${effective_seed}")
             case "$STOP_MODE" in
@@ -341,6 +385,11 @@ jobs:
             export RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             export METRICS_JSON="$metrics_json"
+            export CORPUS_MODE_SLUG="$mode_slug"
+            export CORPUS_START_MODE_USED="$CORPUS_START_MODE"
+            export SEED_BRANCH_USED="$CORPUS_BRANCH"
+            export SEED_FILE_COUNT="$seed_file_count"
+            export SEED_SOURCE="$seed_source"
 
             python3 - <<'PY'
           import json
@@ -363,6 +412,11 @@ jobs:
               'seed': int(os.environ['FUZZ_SEED_USED']) if os.environ['FUZZ_SEED_USED'] else None,
               'tested_commit': os.environ['TESTED_COMMIT'],
               'tested_commit_url': os.environ['TESTED_COMMIT_URL'],
+              'mode_slug': os.environ['CORPUS_MODE_SLUG'],
+              'corpus_start_mode': os.environ['CORPUS_START_MODE_USED'],
+              'seed_branch': os.environ['SEED_BRANCH_USED'],
+              'seed_file_count': int(os.environ['SEED_FILE_COUNT']) if os.environ['SEED_FILE_COUNT'] else 0,
+              'seed_source': os.environ['SEED_SOURCE'],
               'final_cov': int(os.environ['FINAL_COV']) if os.environ['FINAL_COV'] else None,
               'final_ft': int(os.environ['FINAL_FT']) if os.environ['FINAL_FT'] else None,
               'final_exec_per_sec': int(os.environ['FINAL_EXEC_PER_SEC']) if os.environ['FINAL_EXEC_PER_SEC'] else None,
@@ -544,6 +598,7 @@ jobs:
               f.write(f"- failed jobs: `{failed}`\n\n")
               if rows:
                   f.write(f"- tested commit: [`{rows[0].get('tested_commit','')}`]({rows[0].get('tested_commit_url','')})\n")
+                  f.write(f"- corpus start mode: `{rows[0].get('corpus_start_mode','')}`\n")
                   f.write(f"- stop mode: `{rows[0].get('stop_mode','')}`\n")
                   f.write(f"- stop value: `{rows[0].get('stop_value','')}`\n")
                   seeds = [row.get('seed') for row in rows if row.get('seed') is not None]
@@ -607,3 +662,13 @@ jobs:
             long-fuzz-download/summary.md
             long-fuzz-download/summary.tsv
             long-fuzz-download/overview.tsv
+
+  auto-promote-corpus:
+    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') }}
+    needs: [discover, fuzz, summarize]
+    uses: ./.github/workflows/long-fuzz-promote-corpus.yml
+    with:
+      compare_run_id: ${{ github.run_id }}
+      targets: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
+      branch_name: ${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}
+    secrets: inherit
