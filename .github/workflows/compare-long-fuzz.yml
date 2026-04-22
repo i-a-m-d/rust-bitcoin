@@ -3,8 +3,8 @@ name: Compare Long Fuzz Modes rust-bitcoin
 run-name: >-
   Compare Long Fuzz Modes: ${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}
   / corpus=${{ github.event.inputs.corpus_start_mode || 'seed' }}
-  / ${{ github.event.inputs.stop_mode || 'seconds' }}=${{ github.event.inputs.stop_value || '19200' }}
-  / runs=${{ github.event.inputs.run_count || '1' }}
+  / ${{ github.event.inputs.stop_mode || 'seconds' }}=${{ github.event.inputs.stop_value || '100' }}
+  / runs=${{ github.event.inputs.run_count || '100' }}
 
 on:
   workflow_dispatch:
@@ -20,12 +20,12 @@ on:
       stop_value:
         description: 'Stop value per fuzz job. For example 100 seconds or 100 runs.'
         required: false
-        default: '19200'
+        default: '100'
         type: string
       run_count:
         description: 'How many runs to queue. New jobs start as slots clear.'
         required: false
-        default: '1'
+        default: '100'
         type: string
       base_seed:
         description: 'Base libFuzzer seed. Run N uses base_seed + N - 1.'
@@ -43,7 +43,7 @@ on:
       auto_promote_corpus:
         description: 'Automatically trigger corpus promotion after the compare run.'
         required: false
-        default: false
+        default: true
         type: boolean
       promotion_branch:
         description: 'Branch used to store canonical corpora when auto-promote is enabled.'
