@@ -130,23 +130,14 @@ jobs:
           components: llvm-tools-preview
 
       - name: Download compare artifacts for target/mode
-        run: |
-          set -euo pipefail
-          mkdir -p compare-artifacts
-          while IFS= read -r artifact_name; do
-            gh run download "$COMPARE_RUN_ID" \
-              --repo "${{ github.repository }}" \
-              --name "$artifact_name" \
-              --dir compare-artifacts
-          done < <(python3 - <<'PY'
-          import json
-
-          for item in json.loads(r'''${{ toJson(matrix.artifact_names) }}'''):
-              print(item)
-          PY
-          )
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.inputs.compare_run_id }}
+          path: compare-artifacts
+          pattern: long-fuzz-compare-data-${{ matrix.target }}-mode-${{ matrix.mode_id }}-batch-*
+          merge-multiple: false
 
       - name: Check out or initialize corpus branch
         run: |
@@ -412,7 +403,7 @@ jobs:
             promotion-output
 
   publish:
-    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && needs.prepare.outputs.entry_count != '0' }}
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' && needs.prepare.outputs.entry_count != '0' && needs.promote-mode.result == 'success' }}
     needs: [prepare, promote-mode]
     runs-on: ubuntu-24.04
     permissions:
