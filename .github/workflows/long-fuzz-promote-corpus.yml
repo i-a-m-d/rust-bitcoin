@@ -211,7 +211,7 @@ jobs:
                     'branch_percent': None,
                 }, indent=2, sort_keys=True) + '\n')
                 raise SystemExit(0)
-            PY
+          PY
 
             pushd upstream-repo/fuzz >/dev/null
             if [[ -n "$rustflags" ]]; then
@@ -249,7 +249,7 @@ jobs:
                 'branch_percent': totals.get('branches', {}).get('percent'),
             }
             output_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
-            PY
+          PY
           }
 
           measure_coverage "$seed_before_dir" "coverage-before.json" "before"
