@@ -44,7 +44,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.event.inputs.compare_run_id }}
           path: compare-artifacts
-          pattern: long-fuzz-compare-data-*
+          pattern: long-fuzz-compare-meta-*
 
       - id: plan
         env:
@@ -59,11 +59,16 @@ jobs:
           entries = {}
 
           for meta_path in sorted(root.rglob('meta.json')):
-              if 'long-fuzz-result' not in meta_path.parts:
+              if 'long-fuzz-meta' not in meta_path.parts:
                   continue
               meta = json.loads(meta_path.read_text())
               key = (meta['target'], int(meta['mode_id']))
-              artifact_name = meta_path.relative_to(root).parts[0]
+              meta_artifact_name = meta_path.relative_to(root).parts[0]
+              artifact_name = meta_artifact_name.replace(
+                  'long-fuzz-compare-meta-',
+                  'long-fuzz-compare-data-',
+                  1,
+              )
               entry = entries.setdefault(key, {
                   'target': meta['target'],
                   'mode_id': int(meta['mode_id']),
