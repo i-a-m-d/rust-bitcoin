@@ -187,68 +187,68 @@ jobs:
           mkdir -p "$final_seed_dir"
 
           measure_coverage() {
-            local corpus_dir="$1"
-            local output_json="$2"
-            local label="$3"
+          local corpus_dir="$1"
+          local output_json="$2"
+          local label="$3"
 
-            python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
-            import json
-            import pathlib
-            import sys
+          python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
+          import json
+          import pathlib
+          import sys
 
-            corpus_dir = pathlib.Path(sys.argv[1])
-            output_json = pathlib.Path(sys.argv[2])
-            label = sys.argv[3]
-            files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
-            if not files:
-                output_json.write_text(json.dumps({
-                    'label': label,
-                    'file_count': 0,
-                    'total_bytes': 0,
-                    'line_percent': None,
-                    'function_percent': None,
-                    'region_percent': None,
-                    'branch_percent': None,
-                }, indent=2, sort_keys=True) + '\n')
-                raise SystemExit(0)
+          corpus_dir = pathlib.Path(sys.argv[1])
+          output_json = pathlib.Path(sys.argv[2])
+          label = sys.argv[3]
+          files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
+          if not files:
+              output_json.write_text(json.dumps({
+                  'label': label,
+                  'file_count': 0,
+                  'total_bytes': 0,
+                  'line_percent': None,
+                  'function_percent': None,
+                  'region_percent': None,
+                  'branch_percent': None,
+              }, indent=2, sort_keys=True) + '\n')
+              raise SystemExit(0)
           PY
 
-            pushd upstream-repo/fuzz >/dev/null
-            if [[ -n "$rustflags" ]]; then
-              env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
-            else
-              cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
-            fi
-            popd >/dev/null
+          pushd upstream-repo/fuzz >/dev/null
+          if [[ -n "$rustflags" ]]; then
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          else
+            cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          fi
+          popd >/dev/null
 
-            host_triple="$(rustc +${FUZZ_NIGHTLY} -vV | awk '/^host: / {print $2}')"
-            sysroot="$(rustc +${FUZZ_NIGHTLY} --print sysroot)"
-            llvm_cov="$sysroot/lib/rustlib/$host_triple/bin/llvm-cov"
-            binary="$GITHUB_WORKSPACE/upstream-repo/fuzz/target/$host_triple/release/$target"
-            profdata="$GITHUB_WORKSPACE/upstream-repo/fuzz/coverage/$target/coverage.profdata"
+          host_triple="$(rustc +${FUZZ_NIGHTLY} -vV | awk '/^host: / {print $2}')"
+          sysroot="$(rustc +${FUZZ_NIGHTLY} --print sysroot)"
+          llvm_cov="$sysroot/lib/rustlib/$host_triple/bin/llvm-cov"
+          binary="$GITHUB_WORKSPACE/upstream-repo/fuzz/target/$host_triple/release/$target"
+          profdata="$GITHUB_WORKSPACE/upstream-repo/fuzz/coverage/$target/coverage.profdata"
 
-            "$llvm_cov" export --summary-only -instr-profile="$profdata" "$binary" > coverage-summary.json
-            python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
-            import json
-            import pathlib
-            import sys
+          "$llvm_cov" export --summary-only -instr-profile="$profdata" "$binary" > coverage-summary.json
+          python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
+          import json
+          import pathlib
+          import sys
 
-            corpus_dir = pathlib.Path(sys.argv[1])
-            output_json = pathlib.Path(sys.argv[2])
-            label = sys.argv[3]
-            summary = json.loads(pathlib.Path('coverage-summary.json').read_text())
-            totals = summary['data'][0]['totals']
-            files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
-            payload = {
-                'label': label,
-                'file_count': len(files),
-                'total_bytes': sum(path.stat().st_size for path in files),
-                'line_percent': totals['lines']['percent'],
-                'function_percent': totals['functions']['percent'],
-                'region_percent': totals['regions']['percent'],
-                'branch_percent': totals.get('branches', {}).get('percent'),
-            }
-            output_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          corpus_dir = pathlib.Path(sys.argv[1])
+          output_json = pathlib.Path(sys.argv[2])
+          label = sys.argv[3]
+          summary = json.loads(pathlib.Path('coverage-summary.json').read_text())
+          totals = summary['data'][0]['totals']
+          files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
+          payload = {
+              'label': label,
+              'file_count': len(files),
+              'total_bytes': sum(path.stat().st_size for path in files),
+              'line_percent': totals['lines']['percent'],
+              'function_percent': totals['functions']['percent'],
+              'region_percent': totals['regions']['percent'],
+              'branch_percent': totals.get('branches', {}).get('percent'),
+          }
+          output_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
           PY
           }
 
