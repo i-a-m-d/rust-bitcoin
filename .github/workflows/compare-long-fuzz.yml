@@ -41,7 +41,7 @@ on:
           - seed
           - empty
       auto_promote_corpus:
-        description: 'Automatically trigger corpus promotion after the compare run.'
+        description: 'Automatically promote corpus within this workflow after the compare run.'
         required: false
         default: true
         type: boolean
@@ -655,23 +655,483 @@ jobs:
             long-fuzz-download/summary.tsv
             long-fuzz-download/overview.tsv
 
-  auto-promote-corpus:
-    if: ${{ always() && github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') }}
-    needs: [discover, fuzz, summarize]
+  promote-prepare:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') && needs.summarize.result == 'success' }}
+    needs: summarize
     runs-on: ubuntu-24.04
     permissions:
-      actions: write
+      actions: read
       contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      entry_count: ${{ steps.plan.outputs.entry_count }}
     steps:
-      - name: Trigger corpus promotion workflow
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: compare-artifacts
+          pattern: long-fuzz-compare-meta-*
+
+      - id: plan
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_FILTER: ${{ github.event.inputs.targets || '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path('compare-artifacts')
+          entries = {}
+
+          for meta_path in sorted(root.rglob('meta.json')):
+              meta_artifact_name = meta_path.relative_to(root).parts[0]
+              if not meta_artifact_name.startswith('long-fuzz-compare-meta-'):
+                  continue
+              meta = json.loads(meta_path.read_text())
+              key = (meta['target'], int(meta['mode_id']))
+              entry = entries.setdefault(key, {
+                  'target': meta['target'],
+                  'mode_id': int(meta['mode_id']),
+                  'mode_name': meta['mode_name'],
+                  'mode_slug': meta.get('mode_slug') or meta['mode_name'].replace('_', '-').replace('+', '-'),
+                  'rustflags': meta.get('rustflags', ''),
+                  'tested_commit': meta['tested_commit'],
+                  'tested_commit_url': meta['tested_commit_url'],
+              })
+
+          raw_filter = os.environ.get('TARGET_FILTER', '').strip()
+          if raw_filter:
+              wanted = {item.strip() for item in raw_filter.split(',') if item.strip()}
+              entries = {key: value for key, value in entries.items() if value['target'] in wanted}
+
+          matrix = sorted(entries.values(), key=lambda item: (item['target'], item['mode_id']))
+          print(f"matrix={json.dumps(matrix)}")
+          print(f"entry_count={len(matrix)}")
+          PY
+
+  promote-mode:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') && needs.promote-prepare.outputs.entry_count != '0' }}
+    needs: promote-prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJson(needs.promote-prepare.outputs.matrix) }}
+    env:
+      FUZZ_NIGHTLY: 'nightly-2026-03-27'
+      CORPUS_BRANCH: ${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}
+      COMPARE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Install test dependencies
+        run: sudo apt-get update -y && sudo apt-get install -y binutils-dev libunwind8-dev libcurl4-openssl-dev libelf-dev libdw-dev cmake gcc libiberty-dev
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          path: workflow-repo
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: rust-bitcoin/rust-bitcoin
+          ref: ${{ matrix.tested_commit }}
+          persist-credentials: false
+          path: upstream-repo
+
+      - uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+        with:
+          toolchain: nightly-2026-03-27
+          components: llvm-tools-preview
+
+      - name: Download compare artifacts for target/mode
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: compare-artifacts
+          pattern: long-fuzz-compare-data-${{ matrix.target }}-mode-${{ matrix.mode_id }}-batch-*
+          merge-multiple: false
+
+      - name: Check out or initialize corpus branch
         run: |
           set -euo pipefail
-          gh api \
-            --method POST \
-            repos/${{ github.repository }}/actions/workflows/long-fuzz-promote-corpus.yml/dispatches \
-            -f ref='${{ github.ref_name }}' \
-            -f inputs[compare_run_id]='${{ github.run_id }}' \
-            -f inputs[targets]='${{ github.event.inputs.targets || 'bitcoin_arbitrary_psbt' }}' \
-            -f inputs[branch_name]='${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}'
+          repo_url="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$repo_url" "$CORPUS_BRANCH" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "$CORPUS_BRANCH" "$repo_url" corpus-store
+          else
+            mkdir -p corpus-store/corpus
+          fi
+
+      - name: Prepare staged corpus inputs
+        run: |
+          set -euo pipefail
+          python3 workflow-repo/.github/scripts/prepare_long_fuzz_promotion_mode.py \
+            --artifacts compare-artifacts \
+            --corpus-store corpus-store \
+            --target "${{ matrix.target }}" \
+            --mode-id "${{ matrix.mode_id }}" \
+            --compare-run-id "$COMPARE_RUN_ID" \
+            --output promotion-work
+
+      - name: Minimize staged corpus and measure coverage
+        run: |
+          set -euo pipefail
+
+          cargo install --force --locked --version 0.12.0 cargo-fuzz
+
+          target="${{ matrix.target }}"
+          mode_id="${{ matrix.mode_id }}"
+          mode_name="${{ matrix.mode_name }}"
+          mode_slug="${{ matrix.mode_slug }}"
+          rustflags="${{ matrix.rustflags }}"
+          candidate_dir="$GITHUB_WORKSPACE/promotion-work/work/candidate"
+          seed_before_dir="$GITHUB_WORKSPACE/promotion-work/work/seed-before"
+          final_seed_dir="$GITHUB_WORKSPACE/promotion-work/corpus/$target/$mode_slug/seed"
+          mkdir -p "$final_seed_dir"
+
+          measure_coverage() {
+          local corpus_dir="$1"
+          local output_json="$2"
+          local label="$3"
+
+          python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
+          import json
+          import pathlib
+          import sys
+
+          corpus_dir = pathlib.Path(sys.argv[1])
+          output_json = pathlib.Path(sys.argv[2])
+          label = sys.argv[3]
+          files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
+          if not files:
+              output_json.write_text(json.dumps({
+                  'label': label,
+                  'file_count': 0,
+                  'total_bytes': 0,
+                  'line_percent': None,
+                  'function_percent': None,
+                  'region_percent': None,
+                  'branch_percent': None,
+              }, indent=2, sort_keys=True) + '\n')
+              raise SystemExit(0)
+          PY
+
+          pushd upstream-repo/fuzz >/dev/null
+          if [[ -n "$rustflags" ]]; then
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          else
+            cargo +${FUZZ_NIGHTLY} fuzz coverage -O --sanitizer none "$target" "$corpus_dir"
+          fi
+          popd >/dev/null
+
+          host_triple="$(rustc +${FUZZ_NIGHTLY} -vV | awk '/^host: / {print $2}')"
+          sysroot="$(rustc +${FUZZ_NIGHTLY} --print sysroot)"
+          llvm_cov="$sysroot/lib/rustlib/$host_triple/bin/llvm-cov"
+          binary="$GITHUB_WORKSPACE/upstream-repo/fuzz/target/$host_triple/release/$target"
+          profdata="$GITHUB_WORKSPACE/upstream-repo/fuzz/coverage/$target/coverage.profdata"
+
+          "$llvm_cov" export --summary-only -instr-profile="$profdata" "$binary" > coverage-summary.json
+          python3 - <<'PY' "$corpus_dir" "$output_json" "$label"
+          import json
+          import pathlib
+          import sys
+
+          corpus_dir = pathlib.Path(sys.argv[1])
+          output_json = pathlib.Path(sys.argv[2])
+          label = sys.argv[3]
+          summary = json.loads(pathlib.Path('coverage-summary.json').read_text())
+          totals = summary['data'][0]['totals']
+          files = [path for path in corpus_dir.rglob('*') if path.is_file()] if corpus_dir.exists() else []
+          payload = {
+              'label': label,
+              'file_count': len(files),
+              'total_bytes': sum(path.stat().st_size for path in files),
+              'line_percent': totals['lines']['percent'],
+              'function_percent': totals['functions']['percent'],
+              'region_percent': totals['regions']['percent'],
+              'branch_percent': totals.get('branches', {}).get('percent'),
+          }
+          output_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          PY
+          }
+
+          measure_coverage "$seed_before_dir" "coverage-before.json" "before"
+          measure_coverage "$candidate_dir" "coverage-candidate.json" "candidate"
+
+          if [[ -n "$rustflags" ]]; then
+            pushd upstream-repo/fuzz >/dev/null
+            env RUSTFLAGS="$rustflags" cargo +${FUZZ_NIGHTLY} fuzz cmin -O --sanitizer none "$target" "$candidate_dir"
+            popd >/dev/null
+          else
+            pushd upstream-repo/fuzz >/dev/null
+            cargo +${FUZZ_NIGHTLY} fuzz cmin -O --sanitizer none "$target" "$candidate_dir"
+            popd >/dev/null
+          fi
+
+          rm -rf "$final_seed_dir"
+          mkdir -p "$final_seed_dir"
+          cp -R "$candidate_dir"/. "$final_seed_dir"/
+
+          measure_coverage "$final_seed_dir" "coverage-final.json" "after"
+
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          prepare_stats = json.loads(pathlib.Path('promotion-work/work/prepare-stats.json').read_text())
+          before = json.loads(pathlib.Path('coverage-before.json').read_text())
+          candidate = json.loads(pathlib.Path('coverage-candidate.json').read_text())
+          after = json.loads(pathlib.Path('coverage-final.json').read_text())
+
+          def ratio(coverage, total_bytes):
+              if coverage is None or not total_bytes:
+                  return None
+              return coverage / total_bytes
+
+          summary = {
+              **prepare_stats,
+              'coverage_before': before,
+              'coverage_candidate_pre_cmin': candidate,
+              'coverage_after': after,
+              'cmin_files_removed': (candidate['file_count'] or 0) - (after['file_count'] or 0),
+              'cmin_bytes_removed': (candidate['total_bytes'] or 0) - (after['total_bytes'] or 0),
+              'line_percent_per_byte_before': ratio(before['line_percent'], before['total_bytes']),
+              'line_percent_per_byte_after': ratio(after['line_percent'], after['total_bytes']),
+              'line_percent_per_byte_candidate': ratio(candidate['line_percent'], candidate['total_bytes']),
+              'delta_line_percent_before_to_candidate': (
+                  None if before['line_percent'] is None or candidate['line_percent'] is None
+                  else candidate['line_percent'] - before['line_percent']
+              ),
+              'delta_line_percent_candidate_to_after': (
+                  None if candidate['line_percent'] is None or after['line_percent'] is None
+                  else after['line_percent'] - candidate['line_percent']
+              ),
+              'delta_line_percent_before_to_after': (
+                  None if before['line_percent'] is None or after['line_percent'] is None
+                  else after['line_percent'] - before['line_percent']
+              ),
+          }
+
+          out_dir = pathlib.Path('promotion-output')
+          out_dir.mkdir(parents=True, exist_ok=True)
+          (out_dir / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+
+          def fmt(value, digits=4):
+              if value is None:
+                  return ''
+              return f"{value:.{digits}f}"
+
+          lines = [
+              f"# Promotion Summary: {summary['target']} / {summary['mode_slug']}",
+              "",
+              f"- compare run id: `{summary['compare_run_id']}`",
+              f"- tested commit: [`{summary['tested_commit']}`]({summary['tested_commit_url']})",
+              f"- successful runs considered: `{summary['successful_runs_considered']}`",
+              f"- failed runs archived: `{summary['failed_runs_archived']}`",
+              f"- candidate files before cmin: `{summary['candidate_files_pre_cmin']}`",
+              f"- final seed files after cmin: `{summary['coverage_after']['file_count']}`",
+              f"- candidate bytes before cmin: `{summary['candidate_bytes_pre_cmin']}`",
+              f"- final seed bytes after cmin: `{summary['coverage_after']['total_bytes']}`",
+              "",
+              "| stage | files | bytes | line % | function % | region % | line % / byte |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+          ]
+          for key, label in [('coverage_before', 'before'), ('coverage_candidate_pre_cmin', 'candidate'), ('coverage_after', 'after')]:
+              item = summary[key]
+              ratio_key = {
+                  'coverage_before': 'line_percent_per_byte_before',
+                  'coverage_candidate_pre_cmin': 'line_percent_per_byte_candidate',
+                  'coverage_after': 'line_percent_per_byte_after',
+              }[key]
+              ratio_value = summary.get(ratio_key)
+              ratio_text = '' if ratio_value is None else f"{ratio_value:.8f}"
+              line_text = '' if item['line_percent'] is None else f"{item['line_percent']:.4f}"
+              func_text = '' if item['function_percent'] is None else f"{item['function_percent']:.4f}"
+              region_text = '' if item['region_percent'] is None else f"{item['region_percent']:.4f}"
+              lines.append(
+                  f"| {label} | {item['file_count']} | {item['total_bytes']} | {line_text} | {func_text} | {region_text} | {ratio_text} |"
+              )
+          lines.extend([
+              "",
+              "| delta | value |",
+              "| --- | ---: |",
+              f"| line % before -> candidate | {fmt(summary['delta_line_percent_before_to_candidate'])} |",
+              f"| line % candidate -> after | {fmt(summary['delta_line_percent_candidate_to_after'])} |",
+              f"| line % before -> after | {fmt(summary['delta_line_percent_before_to_after'])} |",
+              f"| cmin files removed | {summary['cmin_files_removed']} |",
+              f"| cmin bytes removed | {summary['cmin_bytes_removed']} |",
+              "",
+          ])
+          (out_dir / 'summary.md').write_text('\n'.join(lines))
+
+          manifest_path = pathlib.Path('promotion-work/corpus') / summary['target'] / summary['mode_slug'] / 'manifest.json'
+          existing_manifest = {}
+          existing_manifest_path = summary.get('existing_manifest_path')
+          if existing_manifest_path:
+              path = pathlib.Path(existing_manifest_path)
+              if path.exists():
+                  existing_manifest = json.loads(path.read_text())
+          manifest = {
+              **existing_manifest,
+              'target': summary['target'],
+              'mode_id': summary['mode_id'],
+              'mode_name': summary['mode_name'],
+              'mode_slug': summary['mode_slug'],
+              'last_compare_run_id': summary['compare_run_id'],
+              'last_tested_commit': summary['tested_commit'],
+              'last_tested_commit_url': summary['tested_commit_url'],
+              'promotion_strategy': 'union-dedupe-cmin',
+              'seed_file_count': summary['coverage_after']['file_count'],
+              'seed_total_bytes': summary['coverage_after']['total_bytes'],
+              'reproducer_file_count': sum(1 for _ in (manifest_path.parent / 'reproducers').rglob('*') if _.is_file()) if (manifest_path.parent / 'reproducers').exists() else 0,
+              'quarantine_file_count': sum(1 for _ in (manifest_path.parent / 'quarantine').rglob('*') if _.is_file()) if (manifest_path.parent / 'quarantine').exists() else 0,
+              'quarantine_run_count': sum(1 for _ in (manifest_path.parent / 'quarantine').iterdir() if _.is_dir()) if (manifest_path.parent / 'quarantine').exists() else 0,
+              'coverage_before': summary['coverage_before'],
+              'coverage_candidate_pre_cmin': summary['coverage_candidate_pre_cmin'],
+              'coverage_after': summary['coverage_after'],
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          PY
+
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          summary = json.loads(pathlib.Path('promotion-output/summary.json').read_text())
+          candidate = summary['coverage_candidate_pre_cmin']['line_percent']
+          after = summary['coverage_after']['line_percent']
+          if candidate is not None and after is not None and after + 1e-9 < candidate:
+              raise SystemExit(
+                  f"cmin reduced coverage for {summary['target']} / {summary['mode_slug']}: {candidate} -> {after}"
+              )
+          PY
+
+      - name: Upload promoted mode result
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-corpus-mode-${{ matrix.target }}-mode-${{ matrix.mode_id }}
+          path: |
+            promotion-work/corpus
+            promotion-output
+
+  publish-corpus:
+    if: ${{ github.repository == 'i-a-m-d/rust-bitcoin' && fromJSON(github.event.inputs.auto_promote_corpus || 'false') && needs.promote-prepare.outputs.entry_count != '0' && needs.promote-mode.result == 'success' }}
+    needs: [promote-prepare, promote-mode]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      CORPUS_BRANCH: ${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: promotion-artifacts
+          pattern: long-fuzz-corpus-mode-*
+
+      - name: Check out or initialize corpus branch
+        run: |
+          set -euo pipefail
+          repo_url="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$repo_url" "$CORPUS_BRANCH" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "$CORPUS_BRANCH" "$repo_url" corpus-store
+          else
+            git init corpus-store
+            pushd corpus-store >/dev/null
+            git checkout -b "$CORPUS_BRANCH"
+            git remote add origin "$repo_url"
+            popd >/dev/null
+          fi
+          mkdir -p corpus-store/corpus
+
+      - name: Assemble corpus branch contents
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import shutil
+
+          root = pathlib.Path('promotion-artifacts')
+          dest_root = pathlib.Path('corpus-store/corpus')
+          for target_dir in sorted(root.glob('*/corpus/*')):
+              if not target_dir.is_dir():
+                  continue
+              for mode_dir in sorted(target_dir.iterdir()):
+                  if not mode_dir.is_dir():
+                      continue
+                  dest = dest_root / target_dir.name / mode_dir.name
+                  if dest.exists():
+                      shutil.rmtree(dest)
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copytree(mode_dir, dest)
+          PY
+
+      - name: Build aggregate promotion summary
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          root = pathlib.Path('promotion-artifacts')
+          rows = []
+          for summary_path in sorted(root.rglob('summary.json')):
+              rows.append(json.loads(summary_path.read_text()))
+
+          summary_json = pathlib.Path('promotion-summary.json')
+          summary_md = pathlib.Path('promotion-summary.md')
+
+          payload = {
+              'compare_run_id': '${{ github.run_id }}',
+              'branch_name': '${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}',
+              'modes': rows,
+          }
+          summary_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+
+          def fmt(value, digits=4):
+              if value is None:
+                  return ''
+              return f"{value:.{digits}f}"
+
+          lines = ['# Long Fuzz Corpus Promotion Summary', '']
+          lines.append(f"- compare run id: `${{ github.run_id }}`")
+          lines.append(f"- corpus branch: `${{ github.event.inputs.promotion_branch || 'fuzz-corpora' }}`")
+          lines.append('')
+          lines.append('| target | mode | success runs | failed runs | seed files before | candidate files | seed files after | line % before | line % candidate | line % after | line % / byte after |')
+          lines.append('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
+          for row in sorted(rows, key=lambda item: (item['target'], item['mode_id'])):
+              before = row['coverage_before']['line_percent']
+              candidate = row['coverage_candidate_pre_cmin']['line_percent']
+              after = row['coverage_after']['line_percent']
+              after_ratio = row['line_percent_per_byte_after']
+              lines.append(
+                  f"| {row['target']} | {row['mode_slug']} | {row['successful_runs_considered']} | {row['failed_runs_archived']} | "
+                  f"{row['existing_seed_files']} | {row['candidate_files_pre_cmin']} | {row['coverage_after']['file_count']} | "
+                  f"{fmt(before)} | {fmt(candidate)} | "
+                  f"{fmt(after)} | {fmt(after_ratio, 8)} |"
+              )
+          summary_md.write_text('\n'.join(lines) + '\n')
+          PY
+
+      - name: Commit and push corpus updates
+        id: publish
+        working-directory: corpus-store
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add corpus
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Update fuzz corpora from compare run ${{ github.run_id }}"
+          git push origin "HEAD:$CORPUS_BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload promotion summary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: long-fuzz-corpus-promotion-${{ github.run_id }}
+          path: |
+            promotion-summary.json
+            promotion-summary.md
